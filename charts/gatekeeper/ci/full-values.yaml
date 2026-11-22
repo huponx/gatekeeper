@@ -1,0 +1,29 @@
+application:
+  deployment:
+    replicas: 2
+    container:
+      image:
+        tag: "v2026.08.1-release-e1f4018"
+  ingress:
+    enabled: true
+    host: api.example.com
+    tls: true
+    tlsSecretName: api-example-tls
+  secrets:
+    - name: GATEKEEPER_CLIENT_SECRET
+      secretName: gatekeeper-client
+      key: secret
+    - name: GATEKEEPER_SESSION_KEY
+      secretName: gatekeeper-session
+      key: keys
+    - name: REDIS_PASSWORD
+      secretName: redis-local-credentials
+      key: password
+  config:
+    data:
+      GATEKEEPER_PUBLIC_URL: https://api.example.com
+      GATEKEEPER_UI_ORIGINS: https://dict.example.com,https://bill.example.com
+      GATEKEEPER_IDENTITY_ISSUER: https://auth.example.com
+      GATEKEEPER_CLIENT_ID: gatekeeper
+      GATEKEEPER_AUDIENCE: gatekeeper
+      REDIS_HOST: redis.infrastructure.svc.cluster.local

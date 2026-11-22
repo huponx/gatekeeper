@@ -1,0 +1,35 @@
+apps:
+  - name: gatekeeper
+    language: go
+    cicd:
+      jobs:
+        containerize-and-package:
+          image-name: gatekeeper
+          dockerfile-path: build/gatekeeper/Dockerfile
+          chart-path: charts/gatekeeper
+          image-tag-paths:
+            - .application.deployment.container.image.tag
+          trivy:
+            severity: "LOW,MEDIUM,HIGH,CRITICAL"
+            ignore-unfixed: true
+            exit-code: 0   # report only: the CVEs are listed in the PR comment, the build does not fail
+global:
+  deploy:
+    repo: huponx/mm-deploy
+    base-branch: main
+    file: "applications/{env}/{app}.yaml"
+    set:
+      - .spec.source.targetRevision
+  environments:
+    dev:
+      workflows: [main]
+      enabled: false
+      labels: [automerge]
+    staging:
+      workflows: [staging]
+      enabled: false
+      labels: [automerge]
+    production:
+      workflows: [production]
+      enabled: false
+      labels: [automerge]

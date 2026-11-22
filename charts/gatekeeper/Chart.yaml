@@ -1,0 +1,12 @@
+apiVersion: v2
+name: gatekeeper
+description: Gatekeeper HTTP gateway and BFF (OIDC login, session cookie, JSON to gRPC routes), deployed with the go-application chart.
+type: application
+# Replaced at release time (update-chart-metadata): version and appVersion carry the release version.
+version: 0.0.0
+appVersion: "0.0.0"
+dependencies:
+  - name: go-application
+    version: 1.3.0
+    repository: oci://ghcr.io/huponx/charts
+    alias: application

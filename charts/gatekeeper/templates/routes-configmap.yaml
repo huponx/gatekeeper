@@ -1,0 +1,18 @@
+# routes.yaml of the gateway, mounted at /etc/gatekeeper by application.deployment.volumes.
+# The name is fixed because go-application does not template `volumes`; Reloader (annotation on the
+# Deployment) restarts the pods when the content changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gatekeeper-routes
+  labels:
+    app.kubernetes.io/name: gatekeeper
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  routes.yaml: |
+    upstreams:
+    {{- range $name, $u := .Values.routes.upstreams }}
+      {{ $name }}: {target: {{ required (printf "routes.upstreams.%s.target is required" $name) $u.target | quote }}}
+    {{- end }}
+    {{- .Files.Get "files/routes.yaml" | nindent 4 }}

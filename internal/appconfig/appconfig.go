@@ -22,7 +22,8 @@ type Gatekeeper struct {
 	// PublicURL + /auth/callback and must be registered on the identity client.
 	PublicURL string `env:"GATEKEEPER_PUBLIC_URL,required"`
 	// UIOrigins are the web apps allowed to call the gateway from a browser, for example
-	// "https://dict.example.com,https://bill.example.com". They get CORS, may be the target of
+	// "https://dict.example.com,https://bill.example.com" (separated by commas, spaces or new lines).
+	// They get CORS, may be the target of
 	// return_to / post logout redirects, and are the Origin values accepted on state changing
 	// requests. Empty means only PublicURL itself (same origin use).
 	UIOrigins []string `env:"GATEKEEPER_UI_ORIGINS" envSeparator:","`
@@ -61,9 +62,13 @@ func (c Gatekeeper) Addr() string { return fmt.Sprintf("%s:%d", c.Host, c.Port) 
 // GATEKEEPER_ALLOWED_ORIGINS), or the gateway's own origin when none is configured.
 func (c Gatekeeper) Origins() []string {
 	var out []string
-	for _, o := range append(append([]string{}, c.UIOrigins...), c.AllowedOrigins...) {
-		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" && !slices.Contains(out, o) {
-			out = append(out, o)
+	for _, item := range append(append([]string{}, c.UIOrigins...), c.AllowedOrigins...) {
+		// an item may hold several origins separated by white space or new lines (a YAML block
+		// scalar in the deployment values), next to the comma separated form
+		for _, o := range strings.Fields(item) {
+			if o = strings.TrimRight(o, "/"); o != "" && !slices.Contains(out, o) {
+				out = append(out, o)
+			}
 		}
 	}
 	if len(out) > 0 {

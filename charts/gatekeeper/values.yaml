@@ -1,0 +1,81 @@
+# Values of the go-application chart live under `application:` (alias of the dependency).
+# image.tag is written at release time (update-deployment-values); the default only keeps `helm template` working.
+#
+# One gatekeeper release per environment: the shared gateway (api.example.com) that the web apps
+# (dict.example.com, bill.example.com, ...) call from the browser, and mobile apps / services call
+# with a Bearer token. mm-deploy sets the host, GATEKEEPER_UI_ORIGINS and the secrets.
+#
+# The routes are part of this chart (routes.yaml at the repo root, linked as files/routes.yaml, rendered into the ConfigMap gatekeeper-routes):
+# one source for every environment. Only the upstream addresses are values.
+routes:
+  upstreams:
+    identity: {target: "identity.application.svc.cluster.local:9090"}
+
+application:
+  deployment:
+    # routes.yaml comes from the ConfigMap gatekeeper-routes that this chart renders
+    # (templates/routes-configmap.yaml).
+    volumes:
+      - name: routes
+        configMap:
+          name: gatekeeper-routes
+    container:
+      image:
+        repository: huponx/gatekeeper
+        tag: "0.0.0"
+      port: 8080
+      envFrom:
+        - configMapRef:
+            name: '{{ include "common.name" . }}-env-vars'
+      startupProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        failureThreshold: 30
+        periodSeconds: 2
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        periodSeconds: 20
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 8080
+        periodSeconds: 10
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      securityContext:
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: routes
+          mountPath: /etc/gatekeeper
+          readOnly: true
+  serviceAccount:
+    create: true
+  service:
+    enabled: true
+    port: 8080
+  config:
+    data:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      LOG_ENCODING: json
+      GATEKEEPER_ROUTES_FILE: /etc/gatekeeper/routes.yaml
+  # Secret values stay out of git: reference existing Secrets (mm-deploy overrides this list).
+  secrets: []
+  ingress:
+    enabled: false
+    tls: true
+  autoscaling:
+    enabled: false
+  pdb:
+    enabled: false

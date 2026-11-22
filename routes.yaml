@@ -1,0 +1,40 @@
+# NOTE: charts/gatekeeper/files/routes.yaml is a symlink to this file (helm reads files only inside the chart
+# and packages the content of a linked file). Keep it a symlink, do not copy this file.
+# Routes of the shared gateway (the admin web app towards identity). Single source of truth: the chart
+# renders this file into the ConfigMap `gatekeeper-routes` (templates/routes-configmap.yaml), so a change
+# here is validated by `go test ./internal/routes`, released with the gateway and deployed by the
+# mm-deploy bump PR. Upstream addresses come from the chart values (`routes.upstreams`).
+#
+# Each `permission` is the one the identity method itself requires (identity/internal/service
+# Permissions): the exchanged token carries the user's permissions, identity checks them again, and
+# gatekeeper refuses early with 403.
+#
+# Request mapping: path parameters, query string and JSON body are merged into the gRPC request
+# message (path wins), so `{user_id}` fills `user_id`. Gin needs one name per path position:
+# every route under /api/users/{user_id}/ uses that name, so there is no GET /api/users/{id}
+# (users are found with GET /api/users?query=<email prefix>).
+routes:
+  # roles
+  - {http: "GET /api/roles", grpc: identity.v1.IdentityService/ListRoles, upstream: identity, permission: "identity:role:read"}
+  - {http: "POST /api/roles", grpc: identity.v1.IdentityService/CreateRole, upstream: identity, permission: "identity:role:write"}
+  - {http: "PUT /api/roles/{role}/permissions", grpc: identity.v1.IdentityService/SetRolePermissions, upstream: identity, permission: "identity:role:write"}
+  - {http: "POST /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/AssignRole, upstream: identity, permission: "identity:role:write"}
+  - {http: "DELETE /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/RevokeRole, upstream: identity, permission: "identity:role:write"}
+  # clients
+  - {http: "GET /api/clients", grpc: identity.v1.IdentityService/ListClients, upstream: identity, permission: "identity:client:read"}
+  - {http: "POST /api/clients", grpc: identity.v1.IdentityService/CreateClient, upstream: identity, permission: "identity:client:write"}
+  - {http: "POST /api/clients/{client_id}/rotate-secret", grpc: identity.v1.IdentityService/RotateClientSecret, upstream: identity, permission: "identity:client:write"}
+  # token exchange policies
+  - {http: "GET /api/exchange-policies", grpc: identity.v1.IdentityService/ListExchangePolicies, upstream: identity, permission: "identity:exchange:read"}
+  - {http: "PUT /api/exchange-policies", grpc: identity.v1.IdentityService/SetExchangePolicy, upstream: identity, permission: "identity:exchange:write"}
+  # users
+  - {http: "GET /api/users", grpc: identity.v1.IdentityService/ListUsers, upstream: identity, permission: "identity:user:read"}
+  - {http: "POST /api/users", grpc: identity.v1.IdentityService/CreateUser, upstream: identity, permission: "identity:user:write"}
+  - {http: "PUT /api/users/{user_id}/disabled", grpc: identity.v1.IdentityService/SetUserDisabled, upstream: identity, permission: "identity:user:write"}
+  - {http: "PUT /api/users/{user_id}/password", grpc: identity.v1.IdentityService/SetUserPassword, upstream: identity, permission: "identity:user:write"}
+  - {http: "POST /api/users/{user_id}/password-reset", grpc: identity.v1.IdentityService/SendPasswordReset, upstream: identity, permission: "identity:user:write"}
+  # MFA per user
+  - {http: "GET /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/GetUserMFA, upstream: identity, permission: "identity:mfa:read"}
+  - {http: "PUT /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/SetUserMFA, upstream: identity, permission: "identity:mfa:write"}
+  - {http: "PUT /api/users/{user_id}/mfa/enforced", grpc: identity.v1.IdentityService/EnforceUserMFA, upstream: identity, permission: "identity:mfa:write"}
+  - {http: "POST /api/users/{user_id}/mfa/reset", grpc: identity.v1.IdentityService/ResetUserMFA, upstream: identity, permission: "identity:mfa:write"}

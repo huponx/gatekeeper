@@ -72,7 +72,7 @@ routes:
 | Variable | Default | |
 | --- | --- | --- |
 | `GATEKEEPER_PUBLIC_URL` | required | `https://api.example.com`; `+/auth/callback` is the redirect URI to register |
-| `GATEKEEPER_UI_ORIGINS` | the public URL | web apps allowed to call from a browser, comma separated (`https://dict.example.com,https://bill.example.com`): CORS, `return_to` targets, accepted `Origin` of unsafe requests. Must be `https` outside `ENV=local` |
+| `GATEKEEPER_UI_ORIGINS` | the public URL | web apps allowed to call from a browser, separated by commas, spaces or new lines (`https://dict.example.com,https://bill.example.com`, or one origin per line in a YAML block scalar `|-`): CORS, `return_to` targets, accepted `Origin` of unsafe requests. Must be `https` outside `ENV=local` |
 | `GATEKEEPER_IDENTITY_ISSUER` | required | issuer URL of identity |
 | `GATEKEEPER_CLIENT_ID` / `GATEKEEPER_CLIENT_SECRET` | required | the confidential client of the gateway (secret from a Secret created by mm-ansible) |
 | `GATEKEEPER_AUDIENCE` | required | the `resource` of that client (`gatekeeper`): `aud` of the user tokens it holds and of the Bearer tokens it accepts |

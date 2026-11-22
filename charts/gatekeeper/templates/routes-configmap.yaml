@@ -1,6 +1,8 @@
-# routes.yaml of the gateway, mounted at /etc/gatekeeper by application.deployment.volumes.
+# routes.yaml and descriptors.binpb of the gateway, mounted at /etc/gatekeeper by application.deployment.volumes.
 # The name is fixed because go-application does not template `volumes`; Reloader (annotation on the
 # Deployment) restarts the pods when the content changes.
+# descriptors.binpb (make descriptors) describes the called services, so the upstreams need no gRPC reflection
+# and a route that does not match a method is a start-up error.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,8 +13,11 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 data:
   routes.yaml: |
+    descriptors: /etc/gatekeeper/descriptors.binpb
     upstreams:
     {{- range $name, $u := .Values.routes.upstreams }}
       {{ $name }}: {target: {{ required (printf "routes.upstreams.%s.target is required" $name) $u.target | quote }}}
     {{- end }}
     {{- .Files.Get "files/routes.yaml" | nindent 4 }}
+binaryData:
+  descriptors.binpb: {{ .Files.Get "files/descriptors.binpb" | b64enc }}

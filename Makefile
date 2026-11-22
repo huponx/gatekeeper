@@ -3,12 +3,13 @@ BIN ?= bin
 IMAGE_TAG  ?= dev
 IMAGE_REPO ?= ghcr.io/huponx
 
-.PHONY: help tidy routes test vet build run e2e docker clean
+.PHONY: help tidy routes descriptors test vet build run e2e docker clean
 
 help:
 	@printf '%s\n' \
 		'tidy    go mod tidy' \
 		'routes  write routes.local.yaml (the chart routes with a local identity upstream)' \
+		'descriptors  rebuild descriptors.binpb from ../protos (buf)' \
 		'test    go test -race ./...' \
 		'vet     go vet ./...' \
 		'build   gatekeeper into $(BIN)/' \
@@ -21,6 +22,11 @@ tidy:
 
 routes:
 	scripts/routes.sh > routes.local.yaml
+
+# descriptors.binpb describes the services the routes call; the chart ships it (the upstreams keep
+# reflection off). Rebuild and commit it whenever ../protos changes a method used in routes.yaml.
+descriptors:
+	buf build ../protos --path ../protos/identity -o descriptors.binpb
 
 test:
 	$(GO) test -race ./...

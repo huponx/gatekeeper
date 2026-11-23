@@ -79,12 +79,18 @@ type argoList struct {
 			Sync struct {
 				Status   string `json:"status"`
 				Revision string `json:"revision"`
+				// Revisions replaces Revision for an application with several sources.
+				Revisions []string `json:"revisions"`
 			} `json:"sync"`
 			Health struct {
 				Status string `json:"status"`
 			} `json:"health"`
 			OperationState struct {
 				FinishedAt string `json:"finishedAt"`
+				SyncResult struct {
+					Revision  string   `json:"revision"`
+					Revisions []string `json:"revisions"`
+				} `json:"syncResult"`
 			} `json:"operationState"`
 		} `json:"status"`
 	} `json:"items"`
@@ -113,7 +119,9 @@ func (c *Client) Apps(ctx context.Context) ([]App, error) {
 
 func (c *Client) fetch(ctx context.Context) ([]App, error) {
 	q := url.Values{}
-	q.Set("fields", "items.metadata.name,items.status.sync.status,items.status.sync.revision,items.status.health.status,items.status.operationState.finishedAt")
+	// No `fields` mask: with it ArgoCD answered without items.status.health (checked against v3.3), so every
+	// application looked Unknown. The full list is a few hundred KB for a dozen applications; the cache keeps
+	// it to one call per CacheTTL, and only the summary below leaves this package.
 	if c.cfg.Project != "" {
 		q.Set("projects", c.cfg.Project)
 	}
@@ -139,14 +147,33 @@ func (c *Client) fetch(ctx context.Context) ([]App, error) {
 	apps := make([]App, 0, len(list.Items))
 	for _, it := range list.Items {
 		apps = append(apps, App{
-			Name:     it.Metadata.Name,
-			Sync:     orUnknown(it.Status.Sync.Status),
-			Health:   orUnknown(it.Status.Health.Status),
-			Revision: it.Status.Sync.Revision,
+			Name:   it.Metadata.Name,
+			Sync:   orUnknown(it.Status.Sync.Status),
+			Health: orUnknown(it.Status.Health.Status),
+			Revision: firstNonEmpty(it.Status.Sync.Revision, first(it.Status.Sync.Revisions),
+				it.Status.OperationState.SyncResult.Revision, first(it.Status.OperationState.SyncResult.Revisions)),
 			SyncedAt: it.Status.OperationState.FinishedAt,
 		})
 	}
 	return apps, nil
+}
+
+func first(v []string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	return v[0]
+}
+
+// firstNonEmpty is the revision of the sync status, else of an application with several sources, else the one
+// the last operation synced.
+func firstNonEmpty(v ...string) string {
+	for _, s := range v {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func orUnknown(s string) string {

@@ -15,6 +15,7 @@ import (
 	"github.com/huponx/gatekeeper/internal/proxy"
 	"github.com/huponx/gatekeeper/internal/routes"
 	"github.com/huponx/gatekeeper/internal/session"
+	"github.com/huponx/gatekeeper/internal/status"
 	"github.com/huponx/gocommon/config"
 	"github.com/huponx/gocommon/grpcclient"
 	"github.com/huponx/gocommon/healthz"
@@ -112,10 +113,18 @@ func main() {
 	router.Use(gin.Recovery(), httpx.Logger(log), httpx.RequestContext(), httpx.AccessLog())
 	router.GET("/healthz", healthz.Live())
 	router.GET("/readyz", healthz.Ready(healthz.Check{Name: "redis", Fn: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }}))
-	bff.New(bff.Config{
+	srvBFF := bff.New(bff.Config{
 		PublicURL: cfg.PublicURL, Origins: cfg.Origins(), PostLoginURL: cfg.PostLoginURL, ACRValues: cfg.DefaultACR,
 		Secure: !cfg.IsLocal() || len(cfg.PublicURL) > 8 && cfg.PublicURL[:8] == "https://",
-	}, oc, verifier, sessions, px, exch, table, log).Routes(router)
+	}, oc, verifier, sessions, px, exch, table, log)
+	if cfg.ArgoCDURL != "" {
+		st, err := status.New(status.Config{URL: cfg.ArgoCDURL, Token: cfg.ArgoCDToken, Project: cfg.ArgoCDProject})
+		if err != nil {
+			log.Fatal("system status", zap.Error(err))
+		}
+		srvBFF.SetStatus(st)
+	}
+	srvBFF.Routes(router)
 
 	srv := &http.Server{
 		Addr: cfg.Addr(), Handler: router,

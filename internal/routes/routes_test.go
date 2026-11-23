@@ -67,6 +67,12 @@ func TestChartRoutes(t *testing.T) {
 		t.Fatal("no routes")
 	}
 	for _, r := range tbl.Routes {
+		if r.Public { // any signed-in user: only the own profile, where identity takes the user from the token
+			if r.Path != "/api/me" && !strings.HasPrefix(r.Path, "/api/me/") {
+				t.Errorf("%s %s: public routes are only for /api/me", r.Method, r.Path)
+			}
+			continue
+		}
 		if !strings.HasPrefix(r.Permission, "identity:") {
 			t.Errorf("%s %s: permission %q", r.Method, r.Path, r.Permission)
 		}

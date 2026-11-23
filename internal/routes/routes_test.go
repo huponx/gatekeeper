@@ -77,9 +77,9 @@ func TestChartRoutes(t *testing.T) {
 			}
 			continue
 		}
-		if r.Public { // any signed-in user: only the own profile, where identity takes the user from the token
-			if r.Path != "/api/me" && !strings.HasPrefix(r.Path, "/api/me/") {
-				t.Errorf("%s %s: public routes are only for /api/me", r.Method, r.Path)
+		if r.Public { // any signed-in user: the own profile (identity takes the user from the token) and the system look
+			if r.Path != "/api/me" && !strings.HasPrefix(r.Path, "/api/me/") && r.Path != "/api/ui-style" {
+				t.Errorf("%s %s: public routes are only for /api/me and /api/ui-style", r.Method, r.Path)
 			}
 			continue
 		}
@@ -93,6 +93,7 @@ func TestChartRoutes(t *testing.T) {
 		"PUT /api/dictionary/settings":    "dictionary:settings:write",
 		"GET /api/dictionary/me/settings": "dictionary:word:read",
 		"PUT /api/dictionary/me/settings": "dictionary:word:read",
+		"PUT /api/ui-style":               "identity:settings:write",
 	}
 	for _, r := range tbl.Routes {
 		key := r.Method + " " + r.Path

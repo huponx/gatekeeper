@@ -69,13 +69,10 @@ func (c Gatekeeper) Addr() string { return fmt.Sprintf("%s:%d", c.Host, c.Port) 
 // GATEKEEPER_ALLOWED_ORIGINS), or the gateway's own origin when none is configured.
 func (c Gatekeeper) Origins() []string {
 	var out []string
-	for _, item := range append(append([]string{}, c.UIOrigins...), c.AllowedOrigins...) {
-		// an item may hold several origins separated by white space or new lines (a YAML block
-		// scalar in the deployment values), next to the comma separated form
-		for _, o := range strings.Fields(item) {
-			if o = strings.TrimRight(o, "/"); o != "" && !slices.Contains(out, o) {
-				out = append(out, o)
-			}
+	// config.Fields: comma, space or new line separated (a YAML block scalar in the deployment values)
+	for _, o := range config.Fields(append(append([]string{}, c.UIOrigins...), c.AllowedOrigins...)) {
+		if o = strings.TrimRight(o, "/"); o != "" && !slices.Contains(out, o) {
+			out = append(out, o)
 		}
 	}
 	if len(out) > 0 {

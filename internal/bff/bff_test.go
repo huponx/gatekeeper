@@ -1,6 +1,7 @@
 package bff
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -103,5 +104,30 @@ func TestBearerRejected(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s: status %d, want 401", name, w.Code)
 		}
+	}
+}
+
+func TestProfileClaims(t *testing.T) {
+	tok := func(payload string) string {
+		return "e30." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".sig"
+	}
+	name, email := profileClaims(tok(`{"sub":"u1","name":"Administrator","email":"admin@example.com"}`))
+	if name != "Administrator" || email != "admin@example.com" {
+		t.Errorf("got %q %q", name, email)
+	}
+	for _, bad := range []string{"", "abc", "a.b.c", tok(`not json`), tok(`{"sub":"u1"}`)} {
+		if n, e := profileClaims(bad); n != "" || e != "" {
+			t.Errorf("%q: got %q %q, want empty", bad, n, e)
+		}
+	}
+}
+
+func TestSystemStatusNeedsSignIn(t *testing.T) {
+	r := testServer(t)
+	if w := do(r, http.MethodGet, "/api/system/status", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous: %d, want 401", w.Code)
+	}
+	if w := do(r, http.MethodGet, "/api/system/status", map[string]string{"Authorization": "Bearer not.a.jwt"}); w.Code != http.StatusUnauthorized {
+		t.Errorf("bad token: %d, want 401", w.Code)
 	}
 }

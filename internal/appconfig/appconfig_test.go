@@ -34,3 +34,20 @@ func TestOriginsSeparators(t *testing.T) {
 		})
 	}
 }
+
+func TestArgoCDSettingsGoTogether(t *testing.T) {
+	base := Gatekeeper{Port: 8080, PublicURL: "https://api.example.com", ArgoCDURL: "http://argocd-server.argocd.svc", ArgoCDToken: "t"}
+	base.Env = "production"
+	if err := base.Validate(); err != nil {
+		t.Fatalf("both set: %v", err)
+	}
+	for name, c := range map[string]Gatekeeper{
+		"url only":   {Port: 8080, PublicURL: "https://api.example.com", ArgoCDURL: "http://x"},
+		"token only": {Port: 8080, PublicURL: "https://api.example.com", ArgoCDToken: "t"},
+	} {
+		c.Env = "production"
+		if c.Validate() == nil {
+			t.Errorf("%s must fail", name)
+		}
+	}
+}

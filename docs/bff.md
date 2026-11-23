@@ -105,7 +105,7 @@ the expiry of the access token, the CSRF token and the creation time (`session.S
 
 ### 4.3 What the browser can learn
 
-Only `GET /auth/me`: `sub`, roles, scopes, permissions, `amr`, the expiry and the `csrf_token`. The tokens are never in a response.
+Only `GET /auth/me`: `sub`, `name` and `email` (read from the ID token of the session, only for display), roles, scopes, permissions, `amr`, the expiry and the `csrf_token`. The tokens are never in a response.
 Permissions are there so the UI can hide buttons. They are a hint: the gateway and the service check them again.
 
 ## 5. Protecting the browser calls

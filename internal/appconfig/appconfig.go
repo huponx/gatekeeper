@@ -51,6 +51,13 @@ type Gatekeeper struct {
 	// DefaultACR, when set (for example "mfa"), is requested on every login.
 	DefaultACR string `env:"GATEKEEPER_ACR_VALUES"`
 
+	// ArgoCDURL turns on GET /api/system/status (the status of the applications for the admin app):
+	// the address of argocd-server, for example http://argocd-server.argocd.svc. ArgoCDToken is the API
+	// token of a read-only account, ArgoCDProject limits the list to one ArgoCD project.
+	ArgoCDURL     string `env:"GATEKEEPER_ARGOCD_URL"`
+	ArgoCDToken   string `env:"GATEKEEPER_ARGOCD_TOKEN"`
+	ArgoCDProject string `env:"GATEKEEPER_ARGOCD_PROJECT"`
+
 	// UpstreamInsecure dials the upstreams without TLS (in-cluster traffic). Per upstream
 	// overrides live in the routes file.
 	UpstreamInsecure bool `env:"GATEKEEPER_UPSTREAM_INSECURE" envDefault:"true"`
@@ -102,6 +109,9 @@ func (c Gatekeeper) Validate() error {
 		if !c.IsLocal() && u.Scheme != "https" {
 			return fmt.Errorf("GATEKEEPER_UI_ORIGINS: %q must be https outside ENV=local", o)
 		}
+	}
+	if (c.ArgoCDURL == "") != (c.ArgoCDToken == "") {
+		return fmt.Errorf("GATEKEEPER_ARGOCD_URL and GATEKEEPER_ARGOCD_TOKEN go together (both or neither)")
 	}
 	if c.SessionAbsoluteTTL < c.SessionIdleTTL {
 		return fmt.Errorf("GATEKEEPER_SESSION_ABSOLUTE_TTL must not be shorter than GATEKEEPER_SESSION_IDLE_TTL")

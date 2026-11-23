@@ -26,7 +26,7 @@ How and why the gateway acts as a BFF (sessions, cookie, CORS, CSRF, logout, lim
 | --- | --- |
 | `GET /auth/login?return_to=https://dict.example.com/app` | Starts the login (redirect to identity). `return_to` is a path of this host or a URL on one of `GATEKEEPER_UI_ORIGINS`; anything else falls back to `GATEKEEPER_POST_LOGIN_URL` |
 | `GET /auth/callback` | Identity returns here; checks `state` against the browser cookie, exchanges the code, creates the session |
-| `GET /auth/me` | `sub`, roles, scopes, permissions and the `csrf_token` of the session (never a token) |
+| `GET /auth/me` | `sub`, `name` and `email` (when identity put them in the ID token), roles, scopes, permissions and the `csrf_token` of the session (never a token) |
 | `POST /auth/logout?return_to=https://dict.example.com/` | Ends the session, revokes the refresh token, returns `logout_url` (end-session of identity; it sends the browser back to `return_to`, a UI origin registered as a post logout URI of the client) |
 | `POST /auth/backchannel-logout` | Called by identity: deletes the sessions of the logged-out user/session |
 | routes of `routes.yaml` | JSON to gRPC, below |
@@ -82,6 +82,8 @@ routes:
 | `GATEKEEPER_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | `8h` / `168h` | sliding and hard lifetime |
 | `GATEKEEPER_ACR_VALUES` | empty | for example `mfa` to require a second factor on every login |
 | `GATEKEEPER_UPSTREAM_INSECURE` | `true` | plain gRPC to upstreams in the cluster |
+| `GATEKEEPER_ARGOCD_URL`, `GATEKEEPER_ARGOCD_TOKEN` | empty | turn on `GET /api/system/status` (the status of the ArgoCD applications for the admin home page): the address of `argocd-server` (in the cluster `http://argocd-server.argocd.svc.cluster.local`) and the API token of a read-only account (mm-ansible `argocd_api_tokens`). Both or neither. Without them the route answers 404 `not_configured` |
+| `GATEKEEPER_ARGOCD_PROJECT` | empty | list only the applications of this ArgoCD project |
 | `GATEKEEPER_POST_LOGIN_URL` | `/` | |
 | `REDIS_*`, `PORT` (8080), `ENV`, `LOG_*` | | gocommon blocks |
 
@@ -250,3 +252,7 @@ POSTGRES_PASSWORD=pw REDIS_HOST=localhost scripts/e2e.sh   # real identity: web 
 `scripts/e2e.sh` needs the `identity` repo next to this one, Postgres with the identity schema (db-migration `V1..V8`), Redis, and the sibling `identity` checkout (the script runs its `identity-setup`, which creates the admin and the clients).
 
 Local `go.work` (git-ignored) points at `../gocommon`; after gocommon is released run `go get github.com/huponx/gocommon@latest && go mod tidy`.
+
+## System status (`GET /api/system/status`)
+
+Not a gRPC route (so it is not in `routes.yaml`): gatekeeper calls the ArgoCD REST API (`GET /api/v1/applications`) with the read-only token and returns only `{apps: [{name, sync, health, revision, syncedAt}], checkedAt}`, no repository URLs or resource details. The caller must be signed in and hold `system:status:read` (migration V13 adds it to the catalog; `*` has it), else 403. The answer is cached for 30 seconds, a failed call answers 502 `unavailable` and the admin app says so without breaking its home page. The token is created by mm-ansible (`argocd_api_tokens`) into the Secret `gatekeeper-argocd` and read by the chart as `GATEKEEPER_ARGOCD_TOKEN`.

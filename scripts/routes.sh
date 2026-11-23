@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Prints the routes.yaml the chart ships (routes.yaml) with a local upstream
-# for identity, for local runs and the web e2e. Usage: scripts/routes.sh [identity gRPC target]
+# Prints the routes.yaml the chart ships (routes.yaml) with a local upstream for identity and the
+# descriptor set (descriptors.binpb, identity does not serve gRPC reflection), for local runs and the
+# e2e scripts. Usage: scripts/routes.sh [identity gRPC target]
 set -euo pipefail
 dir=$(cd "$(dirname "$0")/.." && pwd)
-printf 'upstreams:\n  identity: {target: "%s"}\n' "${1:-localhost:9090}"
+printf 'descriptors: %s/descriptors.binpb\nupstreams:\n  identity: {target: "%s"}\n' "$dir" "${1:-localhost:9090}"
 cat "$dir/routes.yaml"

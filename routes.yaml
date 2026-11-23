@@ -11,18 +11,29 @@
 #
 # Request mapping: path parameters, query string and JSON body are merged into the gRPC request
 # message (path wins), so `{user_id}` fills `user_id`. Gin needs one name per path position:
-# every route under /api/users/{user_id}/ uses that name, so there is no GET /api/users/{id}
-# (users are found with GET /api/users?query=<email prefix>).
+# every route under /api/users/ uses that name, so a user is read with GET /api/users/{user_id}
+# (GetUserRequest has a `user_id` field for it) and found with GET /api/users?query=<email prefix>.
+# PUT /api/users/{user_id}/avatar carries the picture as base64 JSON (at most 64 KiB decoded, the
+# gateway accepts bodies up to 1 MiB).
 routes:
   # roles
   - {http: "GET /api/roles", grpc: identity.v1.IdentityService/ListRoles, upstream: identity, permission: "identity:role:read"}
   - {http: "POST /api/roles", grpc: identity.v1.IdentityService/CreateRole, upstream: identity, permission: "identity:role:write"}
+  - {http: "PUT /api/roles/{role}", grpc: identity.v1.IdentityService/UpdateRole, upstream: identity, permission: "identity:role:write"}
+  - {http: "DELETE /api/roles/{role}", grpc: identity.v1.IdentityService/DeleteRole, upstream: identity, permission: "identity:role:write"}
   - {http: "PUT /api/roles/{role}/permissions", grpc: identity.v1.IdentityService/SetRolePermissions, upstream: identity, permission: "identity:role:write"}
+  - {http: "GET /api/permissions", grpc: identity.v1.IdentityService/ListPermissions, upstream: identity, permission: "identity:permission:read"}
+  - {http: "POST /api/permissions", grpc: identity.v1.IdentityService/CreatePermission, upstream: identity, permission: "identity:permission:write"}
+  - {http: "PUT /api/permissions/{permission}", grpc: identity.v1.IdentityService/UpdatePermission, upstream: identity, permission: "identity:permission:write"}
+  - {http: "DELETE /api/permissions/{permission}", grpc: identity.v1.IdentityService/DeletePermission, upstream: identity, permission: "identity:permission:write"}
   - {http: "POST /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/AssignRole, upstream: identity, permission: "identity:role:write"}
   - {http: "DELETE /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/RevokeRole, upstream: identity, permission: "identity:role:write"}
   # clients
   - {http: "GET /api/clients", grpc: identity.v1.IdentityService/ListClients, upstream: identity, permission: "identity:client:read"}
   - {http: "POST /api/clients", grpc: identity.v1.IdentityService/CreateClient, upstream: identity, permission: "identity:client:write"}
+  - {http: "PUT /api/clients/{client_id}", grpc: identity.v1.IdentityService/UpdateClient, upstream: identity, permission: "identity:client:write"}
+  - {http: "PUT /api/clients/{client_id}/disabled", grpc: identity.v1.IdentityService/SetClientDisabled, upstream: identity, permission: "identity:client:write"}
+  - {http: "DELETE /api/clients/{client_id}", grpc: identity.v1.IdentityService/DeleteClient, upstream: identity, permission: "identity:client:write"}
   - {http: "POST /api/clients/{client_id}/rotate-secret", grpc: identity.v1.IdentityService/RotateClientSecret, upstream: identity, permission: "identity:client:write"}
   # token exchange policies
   - {http: "GET /api/exchange-policies", grpc: identity.v1.IdentityService/ListExchangePolicies, upstream: identity, permission: "identity:exchange:read"}
@@ -30,9 +41,19 @@ routes:
   # users
   - {http: "GET /api/users", grpc: identity.v1.IdentityService/ListUsers, upstream: identity, permission: "identity:user:read"}
   - {http: "POST /api/users", grpc: identity.v1.IdentityService/CreateUser, upstream: identity, permission: "identity:user:write"}
+  - {http: "GET /api/users/{user_id}", grpc: identity.v1.IdentityService/GetUser, upstream: identity, permission: "identity:user:read"}
+  - {http: "PUT /api/users/{user_id}", grpc: identity.v1.IdentityService/UpdateUser, upstream: identity, permission: "identity:user:write"}
+  - {http: "PUT /api/users/{user_id}/avatar", grpc: identity.v1.IdentityService/SetUserAvatar, upstream: identity, permission: "identity:user:write"}
+  - {http: "POST /api/users/{user_id}/welcome", grpc: identity.v1.IdentityService/SendWelcome, upstream: identity, permission: "identity:user:write"}
   - {http: "PUT /api/users/{user_id}/disabled", grpc: identity.v1.IdentityService/SetUserDisabled, upstream: identity, permission: "identity:user:write"}
   - {http: "PUT /api/users/{user_id}/password", grpc: identity.v1.IdentityService/SetUserPassword, upstream: identity, permission: "identity:user:write"}
   - {http: "POST /api/users/{user_id}/password-reset", grpc: identity.v1.IdentityService/SendPasswordReset, upstream: identity, permission: "identity:user:write"}
+  - {http: "GET /api/user-stats", grpc: identity.v1.IdentityService/GetUserStats, upstream: identity, permission: "identity:user:read"}
+  # the signed-in user's own profile: any signed-in user, no permission (identity takes the user from the
+  # token, never from the request; `public` means signed in, never anonymous)
+  - {http: "GET /api/me", grpc: identity.v1.IdentityService/GetMe, upstream: identity, public: true}
+  - {http: "PUT /api/me", grpc: identity.v1.IdentityService/UpdateMe, upstream: identity, public: true}
+  - {http: "PUT /api/me/avatar", grpc: identity.v1.IdentityService/SetMyAvatar, upstream: identity, public: true}
   # MFA per user
   - {http: "GET /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/GetUserMFA, upstream: identity, permission: "identity:mfa:read"}
   - {http: "PUT /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/SetUserMFA, upstream: identity, permission: "identity:mfa:write"}

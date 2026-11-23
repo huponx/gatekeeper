@@ -6,6 +6,7 @@ package bff
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/huponx/gatekeeper/internal/proxy"
 	"github.com/huponx/gatekeeper/internal/routes"
 	"github.com/huponx/gatekeeper/internal/session"
+	systemstatus "github.com/huponx/gatekeeper/internal/status"
 	"github.com/huponx/gocommon/apperror"
 	"github.com/huponx/gocommon/authn"
 	"github.com/huponx/gocommon/httpx"
@@ -47,6 +49,14 @@ type Caller interface {
 	Call(ctx context.Context, r routes.Route, body []byte, token string) ([]byte, error)
 }
 
+// StatusSource lists the applications of the system (satisfied by *status.Client).
+type StatusSource interface {
+	Apps(ctx context.Context) ([]systemstatus.App, error)
+}
+
+// StatusPermission is what GET /api/system/status needs.
+const StatusPermission = "system:status:read"
+
 type Config struct {
 	PublicURL    string
 	Origins      []string
@@ -64,6 +74,7 @@ type Server struct {
 	caller   Caller
 	exch     Exchanger
 	table    *routes.Table
+	status   StatusSource
 	log      *zap.Logger
 	now      func() time.Time
 }
@@ -74,6 +85,9 @@ func New(cfg Config, oc *oidcclient.Client, v *jwtx.Verifier, st *session.Store,
 	}
 	return &Server{cfg: cfg, oidc: oc, verifier: v, sessions: st, caller: c, exch: ex, table: t, log: log, now: time.Now}
 }
+
+// SetStatus enables GET /api/system/status; without it the route answers 404 not_configured.
+func (s *Server) SetStatus(src StatusSource) { s.status = src }
 
 // Routes registers /auth/* and the configured routes.
 func (s *Server) Routes(r *gin.Engine) {
@@ -88,6 +102,7 @@ func (s *Server) Routes(r *gin.Engine) {
 	r.GET("/auth/me", s.me)
 	r.POST("/auth/logout", s.logout)
 	r.POST("/auth/backchannel-logout", s.backchannelLogout)
+	r.GET("/api/system/status", s.systemStatus)
 	for _, rt := range s.table.Routes {
 		r.Handle(rt.Method, ginPath(rt.Path), s.route(rt))
 	}
@@ -408,10 +423,41 @@ func (s *Server) me(c *gin.Context) {
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	out := gin.H{
 		"sub": p.Subject, "roles": p.Roles, "scopes": p.Scopes, "perms": p.Perms,
 		"amr": p.AMR, "csrf_token": sess.CSRF, "expires_at": sess.ExpiresAt.UTC(),
-	})
+	}
+	// who to show in the UI: the profile claims of the ID token that identity issued at sign in
+	name, email := profileClaims(sess.IDToken)
+	if name != "" {
+		out["name"] = name
+	}
+	if email != "" {
+		out["email"] = email
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// profileClaims reads name and email from an ID token. The token comes from the sealed server side
+// session (identity's answer to the code exchange, which the OIDC client verified), and the result is
+// only displayed, so the signature is not checked again here.
+func profileClaims(idToken string) (name, email string) {
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		return "", ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", ""
+	}
+	var c struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	if json.Unmarshal(raw, &c) != nil {
+		return "", ""
+	}
+	return c.Name, c.Email
 }
 
 func (s *Server) logout(c *gin.Context) {
@@ -467,6 +513,32 @@ func (s *Server) backchannelLogout(c *gin.Context) {
 	}
 	s.log.Info("back-channel logout", zap.String("sub", claims.Subject), zap.Int("sessions", n))
 	c.Status(http.StatusOK)
+}
+
+// ---- system status ----
+
+// systemStatus answers the applications of ArgoCD for users who hold system:status:read (deny by default,
+// like a route without `public`). Not a gRPC route, so it is not in routes.yaml.
+func (s *Server) systemStatus(c *gin.Context) {
+	_, _, p, ok := s.authenticate(c)
+	if !ok {
+		return
+	}
+	if !p.Can(StatusPermission) {
+		fail(c, http.StatusForbidden, "forbidden", "you are not allowed to do this")
+		return
+	}
+	if s.status == nil {
+		fail(c, http.StatusNotFound, "not_configured", "the system status is not configured")
+		return
+	}
+	apps, err := s.status.Apps(c.Request.Context())
+	if err != nil {
+		s.log.Warn("system status", zap.Error(err))
+		fail(c, http.StatusBadGateway, "unavailable", "the system status could not be read")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"apps": apps, "checkedAt": s.now().UTC()})
 }
 
 // ---- routes ----

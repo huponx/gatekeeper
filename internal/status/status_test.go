@@ -13,6 +13,8 @@ import (
 const sample = `{"items":[
  {"metadata":{"name":"identity"},"status":{"sync":{"status":"Synced","revision":"abc123"},"health":{"status":"Healthy"},"operationState":{"finishedAt":"2026-11-22T10:00:00Z"}}},
  {"metadata":{"name":"gatekeeper"},"status":{"sync":{"status":"OutOfSync"},"health":{"status":"Degraded"}}},
+ {"metadata":{"name":"multi"},"status":{"sync":{"status":"Synced","revisions":["r1","r2"]},"health":{"status":"Healthy"}}},
+ {"metadata":{"name":"op"},"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"},"operationState":{"syncResult":{"revision":"fromop"}}}},
  {"metadata":{"name":"new"},"status":{}}
 ]}`
 
@@ -23,6 +25,9 @@ func server(t *testing.T, calls *atomic.Int32, code int) *httptest.Server {
 		if r.URL.Path != "/api/v1/applications" || r.Header.Get("Authorization") != "Bearer tok" {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
+		}
+		if r.URL.Query().Has("fields") {
+			t.Errorf("a fields mask drops status.health in ArgoCD, it must not be sent: %q", r.URL.RawQuery)
 		}
 		if r.URL.Query().Get("projects") != "mm" {
 			t.Errorf("projects = %q", r.URL.Query().Get("projects"))
@@ -43,7 +48,7 @@ func TestAppsSummarisesAndCaches(t *testing.T) {
 	now := time.Unix(1000, 0)
 	c.now = func() time.Time { return now }
 	apps, err := c.Apps(context.Background())
-	if err != nil || len(apps) != 3 {
+	if err != nil || len(apps) != 5 {
 		t.Fatalf("apps %v err %v", apps, err)
 	}
 	if apps[0] != (App{Name: "identity", Sync: "Synced", Health: "Healthy", Revision: "abc123", SyncedAt: "2026-11-22T10:00:00Z"}) {
@@ -52,8 +57,11 @@ func TestAppsSummarisesAndCaches(t *testing.T) {
 	if apps[1].Sync != "OutOfSync" || apps[1].Health != "Degraded" {
 		t.Errorf("second %+v", apps[1])
 	}
-	if apps[2].Sync != "Unknown" || apps[2].Health != "Unknown" {
-		t.Errorf("empty status must be Unknown: %+v", apps[2])
+	if apps[2].Revision != "r1" || apps[3].Revision != "fromop" {
+		t.Errorf("revision fallbacks: %+v %+v", apps[2], apps[3])
+	}
+	if apps[4].Sync != "Unknown" || apps[4].Health != "Unknown" {
+		t.Errorf("empty status must be Unknown: %+v", apps[4])
 	}
 	if _, err := c.Apps(context.Background()); err != nil || calls.Load() != 1 {
 		t.Errorf("second call must come from the cache: calls=%d err=%v", calls.Load(), err)

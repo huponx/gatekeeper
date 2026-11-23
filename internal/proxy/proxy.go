@@ -196,6 +196,11 @@ func (p *Proxy) Call(ctx context.Context, r routes.Route, body []byte, token str
 		return nil, &Error{Kind: KindUnavailable, Err: err}
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	if r.Timeout > 0 { // the gRPC client only adds its default deadline when there is none
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.Timeout)
+		defer cancel()
+	}
 	out := dynamicpb.NewMessage(m.out)
 	if err := cc.Invoke(ctx, m.full, in, out); err != nil {
 		return nil, err

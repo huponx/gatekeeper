@@ -41,6 +41,10 @@ func TestParseRejects(t *testing.T) {
 		"unknown upstream": "  - {http: GET /a, grpc: p.S/M, upstream: nope, public: true}\n",
 		"bad grpc":         "  - {http: GET /a, grpc: p.S, upstream: courier, public: true}\n",
 		"duplicate":        "  - {http: GET /a, grpc: p.S/M, upstream: courier, public: true}\n  - {http: GET /a, grpc: p.S/N, upstream: courier, public: true}\n",
+		"anonymous post":   "  - {http: POST /a, grpc: p.S/M, upstream: courier, anonymous: true, download: true}\n",
+		"anonymous json":   "  - {http: GET /a, grpc: p.S/M, upstream: courier, anonymous: true}\n",
+		"anonymous+perm":   "  - {http: GET /a, grpc: p.S/M, upstream: courier, anonymous: true, download: true, permission: a:b}\n",
+		"download post":    "  - {http: POST /a, grpc: p.S/M, upstream: courier, public: true, download: true}\n",
 		"unknown field":    "  - {http: GET /a, grpc: p.S/M, upstream: courier, public: true, perm: x}\n",
 	}
 	for name, body := range cases {
@@ -59,7 +63,7 @@ func TestChartRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tbl, err := Parse([]byte("upstreams:\n  identity: {target: \"identity:9090\"}\n" + string(raw)))
+	tbl, err := Parse([]byte("upstreams:\n  identity: {target: \"identity:9090\"}\n  dictionary: {target: \"dictionary:9090\"}\n" + string(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,14 +71,39 @@ func TestChartRoutes(t *testing.T) {
 		t.Fatal("no routes")
 	}
 	for _, r := range tbl.Routes {
+		if r.Anonymous { // no session: only the download of a deck, the token in the path is the authorization
+			if r.Method != "GET" || !r.Download || !strings.HasPrefix(r.Path, "/api/dictionary/downloads/") {
+				t.Errorf("%s %s: anonymous routes are only for the deck download", r.Method, r.Path)
+			}
+			continue
+		}
 		if r.Public { // any signed-in user: only the own profile, where identity takes the user from the token
 			if r.Path != "/api/me" && !strings.HasPrefix(r.Path, "/api/me/") {
 				t.Errorf("%s %s: public routes are only for /api/me", r.Method, r.Path)
 			}
 			continue
 		}
-		if !strings.HasPrefix(r.Permission, "identity:") {
+		if !strings.HasPrefix(r.Permission, "identity:") && !strings.HasPrefix(r.Permission, "dictionary:") {
 			t.Errorf("%s %s: permission %q", r.Method, r.Path, r.Permission)
 		}
+	}
+	// the settings of the dictionary: the system ones need their own permissions, the own ones only the word read
+	want := map[string]string{
+		"GET /api/dictionary/settings":    "dictionary:settings:read",
+		"PUT /api/dictionary/settings":    "dictionary:settings:write",
+		"GET /api/dictionary/me/settings": "dictionary:word:read",
+		"PUT /api/dictionary/me/settings": "dictionary:word:read",
+	}
+	for _, r := range tbl.Routes {
+		key := r.Method + " " + r.Path
+		if perm, ok := want[key]; ok {
+			if r.Permission != perm {
+				t.Errorf("%s: permission %q, want %q", key, r.Permission, perm)
+			}
+			delete(want, key)
+		}
+	}
+	for key := range want {
+		t.Errorf("route %s is missing", key)
 	}
 }

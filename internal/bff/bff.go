@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -43,6 +45,8 @@ const (
 // Exchanger obtains the token sent to an upstream (satisfied by *tokenexchange.Client).
 type Exchanger interface {
 	ExchangeToken(ctx context.Context, subjectToken, audience string, scopes ...string) (string, error)
+	// ServiceToken is a token of gatekeeper itself (client credentials), for the anonymous routes.
+	ServiceToken(ctx context.Context, audience string) (string, error)
 }
 
 type Caller interface {
@@ -544,6 +548,9 @@ func (s *Server) systemStatus(c *gin.Context) {
 // ---- routes ----
 
 func (s *Server) route(rt routes.Route) gin.HandlerFunc {
+	if rt.Anonymous {
+		return s.anonymousDownload(rt)
+	}
 	return func(c *gin.Context) {
 		_, sess, p, ok := s.authenticate(c)
 		if !ok {
@@ -577,8 +584,65 @@ func (s *Server) route(rt routes.Route) gin.HandlerFunc {
 			s.writeError(c, rt, err)
 			return
 		}
+		if rt.Download {
+			s.writeFile(c, rt, out)
+			return
+		}
 		c.Data(http.StatusOK, "application/json; charset=utf-8", out)
 	}
+}
+
+// anonymousDownload serves a route without a session: the secret in the path is the authorization and
+// the upstream is called with the service token of gatekeeper. It is meant for an app (an Anki app)
+// that fetches a link without cookies.
+func (s *Server) anonymousDownload(rt routes.Route) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// the last parameter may carry a file extension (.apkg) that only makes the link look like a file
+		if n := len(c.Params); n > 0 {
+			c.Params[n-1].Value = strings.TrimSuffix(c.Params[n-1].Value, path.Ext(c.Params[n-1].Value))
+		}
+		body, err := s.requestJSON(c, rt)
+		if err != nil {
+			fail(c, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		tok, err := s.exch.ServiceToken(c.Request.Context(), rt.Audience)
+		if err != nil {
+			s.log.Error("service token", zap.Error(err), zap.String("audience", rt.Audience))
+			fail(c, http.StatusBadGateway, "unavailable", "upstream authorization is unavailable")
+			return
+		}
+		out, err := s.caller.Call(c.Request.Context(), rt, body, tok)
+		if err != nil {
+			s.writeError(c, rt, err)
+			return
+		}
+		s.writeFile(c, rt, out)
+	}
+}
+
+// writeFile answers a download route: the reply has `filename` and `data` (base64 in the JSON).
+func (s *Server) writeFile(c *gin.Context, rt routes.Route, reply []byte) {
+	var r struct {
+		Filename string `json:"filename"`
+		Data     string `json:"data"`
+	}
+	var data []byte
+	err := json.Unmarshal(reply, &r)
+	if err == nil {
+		data, err = base64.StdEncoding.DecodeString(r.Data)
+	}
+	if err != nil {
+		s.log.Error("download reply", zap.Error(err), zap.String("grpc", rt.GRPC))
+		fail(c, http.StatusBadGateway, "unavailable", "the service returned an unreadable file")
+		return
+	}
+	name := r.Filename
+	if name == "" {
+		name = "download"
+	}
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	c.Data(http.StatusOK, "application/octet-stream", data)
 }
 
 // requestJSON builds the gRPC request: the JSON body (an object) plus the path parameters and

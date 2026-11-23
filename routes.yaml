@@ -59,6 +59,9 @@ routes:
   - {http: "PUT /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/SetUserMFA, upstream: identity, permission: "identity:mfa:write"}
   - {http: "PUT /api/users/{user_id}/mfa/enforced", grpc: identity.v1.IdentityService/EnforceUserMFA, upstream: identity, permission: "identity:mfa:write"}
   - {http: "POST /api/users/{user_id}/mfa/reset", grpc: identity.v1.IdentityService/ResetUserMFA, upstream: identity, permission: "identity:mfa:write"}
+  # the look of the web apps, one value for the whole system: any signed-in user reads it, an administrator sets it
+  - {http: "GET /api/ui-style", grpc: identity.v1.IdentityService/GetUIStyle, upstream: identity, public: true}
+  - {http: "PUT /api/ui-style", grpc: identity.v1.IdentityService/SetUIStyle, upstream: identity, permission: "identity:settings:write"}
   # dictionary (look words up, keep a list of saved words, export it as an Anki deck); the user is the
   # token's, never a field of the request. `{word}` is the only parameter name under /api/dictionary/.
   # POST /api/dictionary/export answers with the .apkg as base64 JSON (at most 3 MiB by default).

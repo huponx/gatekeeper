@@ -12,7 +12,7 @@
 //	    permission: courier:notification:send
 //
 // A route without "permission" is refused at load time unless it says `public: true`, which
-// means any signed-in user: deny by default.
+// means any signed-in user, or `anonymous: true` (a download link, see Route): deny by default.
 package routes
 
 import (
@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -38,6 +39,16 @@ type Route struct {
 	Permission string `yaml:"permission"`
 	// Public: any signed-in user may call (no permission needed). Never anonymous.
 	Public bool `yaml:"public"`
+	// Anonymous: no session at all, for a link that is itself the secret (the download of an Anki deck).
+	// Gatekeeper calls the upstream with its own service token. Only for a GET with `download: true`.
+	Anonymous bool `yaml:"anonymous"`
+	// Timeout is the deadline of the call to the upstream; default is the one of the gRPC client (5s).
+	// Set it for a method that does real work (building an Anki deck downloads audio files).
+	Timeout time.Duration `yaml:"timeout"`
+	// Download: the reply message has the fields `filename` (string) and `data` (bytes), and the HTTP
+	// answer is that file (an attachment) instead of JSON. The last path segment may end in an extension
+	// (/downloads/{token}.apkg): the extension is dropped from the parameter.
+	Download bool `yaml:"download"`
 
 	Method string `yaml:"-"`
 	Path   string `yaml:"-"`
@@ -111,12 +122,25 @@ func Parse(b []byte) (*Table, error) {
 		if r.Audience == "" {
 			r.Audience = r.Upstream
 		}
-		if r.Permission == "" && !r.Public {
+		if r.Download && method != http.MethodGet {
+			return nil, fmt.Errorf("routes[%d] %s: download is only for GET", i, key)
+		}
+		if r.Anonymous && (method != http.MethodGet || !r.Download) {
+			return nil, fmt.Errorf("routes[%d] %s: anonymous is only for a GET with download: true", i, key)
+		}
+		if r.Permission == "" && !r.Public && !r.Anonymous {
 			return nil, fmt.Errorf("routes[%d] %s: set permission, or public: true for any signed-in user", i, key)
 		}
-		if r.Permission != "" && r.Public {
-			return nil, fmt.Errorf("routes[%d] %s: permission and public are exclusive", i, key)
+		if n := b2i(r.Permission != "") + b2i(r.Public) + b2i(r.Anonymous); n > 1 {
+			return nil, fmt.Errorf("routes[%d] %s: permission, public and anonymous are exclusive", i, key)
 		}
 	}
 	return &t, nil
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

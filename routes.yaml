@@ -59,3 +59,25 @@ routes:
   - {http: "PUT /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/SetUserMFA, upstream: identity, permission: "identity:mfa:write"}
   - {http: "PUT /api/users/{user_id}/mfa/enforced", grpc: identity.v1.IdentityService/EnforceUserMFA, upstream: identity, permission: "identity:mfa:write"}
   - {http: "POST /api/users/{user_id}/mfa/reset", grpc: identity.v1.IdentityService/ResetUserMFA, upstream: identity, permission: "identity:mfa:write"}
+  # dictionary (look words up, keep a list of saved words, export it as an Anki deck); the user is the
+  # token's, never a field of the request. `{word}` is the only parameter name under /api/dictionary/.
+  # POST /api/dictionary/export answers with the .apkg as base64 JSON (at most 3 MiB by default).
+# POST /api/dictionary/export-link keeps the deck behind a random token for a few minutes and answers with
+# the token; GET /api/dictionary/downloads/{token}.apkg is the only anonymous route: an Anki app fetches
+# the link without cookies, so the token in the path is the authorization (one use, short life) and
+# gatekeeper calls dictionary with its own service token. `download: true` answers with the file.
+# `timeout: 40s` on the two exports: building a deck downloads the audio files (up to 20s) and the default
+# deadline of the gRPC client is 5s.
+  - {http: "GET /api/dictionary/words/{word}", grpc: dictionary.v1.DictionaryService/LookupWord, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "POST /api/dictionary/lookup", grpc: dictionary.v1.DictionaryService/LookupWords, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "GET /api/dictionary/saved", grpc: dictionary.v1.DictionaryService/ListSavedWords, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "POST /api/dictionary/saved", grpc: dictionary.v1.DictionaryService/SaveWord, upstream: dictionary, permission: "dictionary:word:write"}
+  - {http: "DELETE /api/dictionary/saved/{word}", grpc: dictionary.v1.DictionaryService/DeleteSavedWord, upstream: dictionary, permission: "dictionary:word:write"}
+  - {http: "POST /api/dictionary/export", grpc: dictionary.v1.DictionaryService/ExportAnki, upstream: dictionary, permission: "dictionary:word:write", timeout: 40s}
+  - {http: "POST /api/dictionary/export-link", grpc: dictionary.v1.DictionaryService/CreateDeckLink, upstream: dictionary, permission: "dictionary:word:write", timeout: 40s}
+  # settings: the whole system (administrators) and the preferences of the signed in user
+  - {http: "GET /api/dictionary/settings", grpc: dictionary.v1.DictionaryService/GetSettings, upstream: dictionary, permission: "dictionary:settings:read"}
+  - {http: "PUT /api/dictionary/settings", grpc: dictionary.v1.DictionaryService/UpdateSettings, upstream: dictionary, permission: "dictionary:settings:write"}
+  - {http: "GET /api/dictionary/me/settings", grpc: dictionary.v1.DictionaryService/GetMySettings, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "PUT /api/dictionary/me/settings", grpc: dictionary.v1.DictionaryService/UpdateMySettings, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "GET /api/dictionary/downloads/{token}", grpc: dictionary.v1.DictionaryService/DownloadDeck, upstream: dictionary, anonymous: true, download: true}

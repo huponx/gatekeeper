@@ -38,6 +38,7 @@ import (
 const (
 	sessionCookie = "session"
 	stateCookie   = "login-state"
+	retryCookie   = "login-retry"
 	csrfHeader    = "Csrf-Token"
 	maxBody       = 1 << 20
 )
@@ -233,11 +234,25 @@ func (s *Server) login(c *gin.Context) {
 	c.Redirect(http.StatusFound, u)
 }
 
+// restartLogin answers an invalid_state of the callback (an old link, the Back button, an expired or foreign
+// state): it starts a new sign-in at /auth/login, which goes back to the post login page (the return_to of the
+// lost attempt is gone with its state). One restart per minute: a short-lived cookie stops a loop, and the
+// second failure is the plain 400 invalid_state.
+func (s *Server) restartLogin(c *gin.Context, msg string) {
+	if s.cookie(c, retryCookie) != "" {
+		s.clearCookie(c, retryCookie)
+		fail(c, http.StatusBadRequest, "invalid_state", msg)
+		return
+	}
+	s.setCookie(c, retryCookie, "1", 60)
+	c.Redirect(http.StatusFound, "/auth/login?return_to="+url.QueryEscape(s.cfg.PostLoginURL))
+}
+
 func (s *Server) callback(c *gin.Context) {
 	ctx := c.Request.Context()
 	state := c.Query("state")
 	if state == "" || state != s.cookie(c, stateCookieName(state)) {
-		fail(c, http.StatusBadRequest, "invalid_state", "the sign-in request does not belong to this browser")
+		s.restartLogin(c, "the sign-in request does not belong to this browser")
 		return
 	}
 	s.clearCookie(c, stateCookieName(state))
@@ -248,7 +263,7 @@ func (s *Server) callback(c *gin.Context) {
 	}
 	l, err := s.sessions.TakeLogin(ctx, state)
 	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_state", "the sign-in request expired")
+		s.restartLogin(c, "the sign-in request expired")
 		return
 	}
 	t, err := s.oidc.Exchange(ctx, c.Query("code"), oidcclient.AuthRequest{State: state, Nonce: l.Nonce, Verifier: l.Verifier})
@@ -273,6 +288,7 @@ func (s *Server) callback(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "unavailable", "sign-in is unavailable")
 		return
 	}
+	s.clearCookie(c, retryCookie)
 	// a new id at every login: no session fixation
 	s.setCookie(c, sessionCookie, id, 0)
 	c.Redirect(http.StatusFound, l.ReturnTo)

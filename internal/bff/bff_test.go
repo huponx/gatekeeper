@@ -193,3 +193,26 @@ func TestAnonymousDownload(t *testing.T) {
 		t.Errorf("unknown link: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestInvalidStateRestartsLoginOnce(t *testing.T) {
+	r := testServer(t)
+	// no state cookie: a new sign-in starts at /auth/login
+	w := do(r, http.MethodGet, "/auth/callback?state=abc&code=x", nil)
+	if w.Code != http.StatusFound || !strings.HasPrefix(w.Header().Get("Location"), "/auth/login?return_to=") {
+		t.Fatalf("first failure: %d %q", w.Code, w.Header().Get("Location"))
+	}
+	var retry *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if strings.Contains(c.Name, retryCookie) {
+			retry = c
+		}
+	}
+	if retry == nil {
+		t.Fatal("the restart must leave a short-lived cookie")
+	}
+	// it fails again with the cookie set: stop, no loop
+	w = do(r, http.MethodGet, "/auth/callback?state=abc&code=x", map[string]string{"Cookie": retry.Name + "=" + retry.Value})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_state") {
+		t.Fatalf("second failure: %d %s", w.Code, w.Body.String())
+	}
+}

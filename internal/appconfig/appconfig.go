@@ -61,6 +61,10 @@ type Gatekeeper struct {
 	// UpstreamInsecure dials the upstreams without TLS (in-cluster traffic). Per upstream
 	// overrides live in the routes file.
 	UpstreamInsecure bool `env:"GATEKEEPER_UPSTREAM_INSECURE" envDefault:"true"`
+	// UpstreamMaxRecvBytes is the largest message gatekeeper accepts from an upstream. A synchronous export
+	// (dictionary: DICTIONARY_EXPORT_MAX_BYTES_CEILING, 10 MiB by default) travels in one message, so keep it
+	// above that ceiling plus a margin; the parts of an export job are streamed in small chunks.
+	UpstreamMaxRecvBytes int `env:"GATEKEEPER_UPSTREAM_MAX_RECV_BYTES" envDefault:"16777216"`
 }
 
 func (c Gatekeeper) Addr() string { return fmt.Sprintf("%s:%d", c.Host, c.Port) }
@@ -109,6 +113,9 @@ func (c Gatekeeper) Validate() error {
 	}
 	if (c.ArgoCDURL == "") != (c.ArgoCDToken == "") {
 		return fmt.Errorf("GATEKEEPER_ARGOCD_URL and GATEKEEPER_ARGOCD_TOKEN go together (both or neither)")
+	}
+	if c.UpstreamMaxRecvBytes != 0 && c.UpstreamMaxRecvBytes < 1<<20 {
+		return fmt.Errorf("GATEKEEPER_UPSTREAM_MAX_RECV_BYTES must be at least 1048576")
 	}
 	if c.SessionAbsoluteTTL < c.SessionIdleTTL {
 		return fmt.Errorf("GATEKEEPER_SESSION_ABSOLUTE_TTL must not be shorter than GATEKEEPER_SESSION_IDLE_TTL")

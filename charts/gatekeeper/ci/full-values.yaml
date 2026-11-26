@@ -22,7 +22,7 @@ application:
   config:
     data:
       GATEKEEPER_PUBLIC_URL: https://api.example.com
-      GATEKEEPER_UI_ORIGINS: https://dict.example.com,https://bill.example.com
+      GATEKEEPER_UI_ORIGINS: https://example.com,https://dict.example.com,https://bill.example.com
       GATEKEEPER_IDENTITY_ISSUER: https://auth.example.com
       GATEKEEPER_CLIENT_ID: gatekeeper
       GATEKEEPER_AUDIENCE: gatekeeper

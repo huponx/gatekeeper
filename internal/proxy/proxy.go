@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -102,7 +103,7 @@ func (p *Proxy) conn(ctx context.Context, name string) (grpc.ClientConnInterface
 }
 
 func (p *Proxy) resolve(ctx context.Context, r routes.Route) (*method, error) {
-	key := r.Upstream + "|" + r.GRPC
+	key := fmt.Sprintf("%s|%s|%t", r.Upstream, r.GRPC, r.Stream) // the same method may be routed with and without stream
 	p.mu.Lock()
 	m := p.methods[key]
 	p.mu.Unlock()
@@ -120,8 +121,13 @@ func (p *Proxy) resolve(ctx context.Context, r routes.Route) (*method, error) {
 	if err != nil {
 		return nil, err
 	}
-	if md.IsStreamingClient() || md.IsStreamingServer() {
-		return nil, errors.New("streaming methods are not supported")
+	switch {
+	case md.IsStreamingClient():
+		return nil, errors.New("client-streaming methods are not supported")
+	case md.IsStreamingServer() && !r.Stream:
+		return nil, errors.New("a server-streaming method needs stream: true on its route")
+	case !md.IsStreamingServer() && r.Stream:
+		return nil, errors.New("stream: true needs a server-streaming method")
 	}
 	m = &method{full: "/" + r.Service + "/" + r.RPC, in: md.Input(), out: md.Output(), at: p.now()}
 	p.mu.Lock()
@@ -206,6 +212,57 @@ func (p *Proxy) Call(ctx context.Context, r routes.Route, body []byte, token str
 		return nil, err
 	}
 	return protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(out)
+}
+
+// CallStream invokes a server-streaming route (stream: true) with the JSON request and passes every reply
+// message to fn as it arrives; an error of fn ends the call and is returned. The upstream stream is cancelled when
+// ctx ends (the client went away) or fn fails.
+func (p *Proxy) CallStream(ctx context.Context, r routes.Route, body []byte, token string, fn func(*dynamicpb.Message) error) error {
+	m, err := p.resolve(ctx, r)
+	if err != nil {
+		return &Error{Kind: KindUnavailable, Err: err}
+	}
+	in := dynamicpb.NewMessage(m.in)
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+	if err := (protojson.UnmarshalOptions{}).Unmarshal(body, in); err != nil {
+		return &Error{Kind: KindBadRequest, Err: err}
+	}
+	cc, err := p.conn(ctx, r.Upstream)
+	if err != nil {
+		return &Error{Kind: KindUnavailable, Err: err}
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if r.Timeout > 0 {
+		var stop context.CancelFunc
+		ctx, stop = context.WithTimeout(ctx, r.Timeout)
+		defer stop()
+	}
+	stream, err := cc.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, m.full)
+	if err != nil {
+		return err
+	}
+	if err := stream.SendMsg(in); err != nil {
+		return err
+	}
+	if err := stream.CloseSend(); err != nil {
+		return err
+	}
+	for {
+		out := dynamicpb.NewMessage(m.out)
+		if err := stream.RecvMsg(out); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if err := fn(out); err != nil {
+			return err
+		}
+	}
 }
 
 // Close releases the proxy; the connections belong to the Dialer.

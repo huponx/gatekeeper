@@ -2,7 +2,7 @@
 # image.tag is written at release time (update-deployment-values); the default only keeps `helm template` working.
 #
 # One gatekeeper release per environment: the shared gateway (api.example.com) that the web apps
-# (dict.example.com, bill.example.com, ...) call from the browser, and mobile apps / services call
+# (example.com, dict.example.com, bill.example.com, ...) call from the browser, and mobile apps / services call
 # with a Bearer token. mm-deploy sets the host, GATEKEEPER_UI_ORIGINS and the secrets.
 #
 # The routes are part of this chart (routes.yaml at the repo root, linked as files/routes.yaml, rendered into the ConfigMap gatekeeper-routes):

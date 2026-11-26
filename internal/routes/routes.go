@@ -49,6 +49,10 @@ type Route struct {
 	// answer is that file (an attachment) instead of JSON. The last path segment may end in an extension
 	// (/downloads/{token}.apkg): the extension is dropped from the parameter.
 	Download bool `yaml:"download"`
+	// Stream: the method is server-streaming and the reply messages are chunks of the file: the first one has
+	// `filename` (string) and `size` (int64), every one has `data` (bytes). The HTTP answer is that file, written
+	// as the chunks arrive, so a file larger than a gRPC message never sits whole in memory. Only with `download: true`.
+	Stream bool `yaml:"stream"`
 
 	Method string `yaml:"-"`
 	Path   string `yaml:"-"`
@@ -124,6 +128,9 @@ func Parse(b []byte) (*Table, error) {
 		}
 		if r.Download && method != http.MethodGet {
 			return nil, fmt.Errorf("routes[%d] %s: download is only for GET", i, key)
+		}
+		if r.Stream && !r.Download {
+			return nil, fmt.Errorf("routes[%d] %s: stream is only for a route with download: true", i, key)
 		}
 		if r.Anonymous && (method != http.MethodGet || !r.Download) {
 			return nil, fmt.Errorf("routes[%d] %s: anonymous is only for a GET with download: true", i, key)

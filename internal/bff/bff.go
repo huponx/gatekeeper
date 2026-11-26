@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 const (
@@ -52,6 +54,8 @@ type Exchanger interface {
 
 type Caller interface {
 	Call(ctx context.Context, r routes.Route, body []byte, token string) ([]byte, error)
+	// CallStream calls a server-streaming route and hands every reply message to fn (a route with stream: true).
+	CallStream(ctx context.Context, r routes.Route, body []byte, token string, fn func(*dynamicpb.Message) error) error
 }
 
 // StatusSource lists the applications of the system (satisfied by *status.Client).
@@ -148,8 +152,21 @@ func (s *Server) cookie(c *gin.Context, name string) string {
 	return v
 }
 
-func fail(c *gin.Context, status int, code, msg string) {
-	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code, "message": msg}})
+// failure is an optional stable reason (and its parameters) of an error, for the client to translate.
+type failure struct {
+	reason string
+	params map[string]string
+}
+
+func fail(c *gin.Context, status int, code, msg string, f ...failure) {
+	e := gin.H{"code": code, "message": msg}
+	if len(f) > 0 && f[0].reason != "" {
+		e["reason"] = f[0].reason
+		if len(f[0].params) > 0 {
+			e["params"] = f[0].params
+		}
+	}
+	c.AbortWithStatusJSON(status, gin.H{"error": e})
 }
 
 // cors answers the browsers of the configured UI origins (credentials allowed, so never "*").
@@ -595,6 +612,10 @@ func (s *Server) route(rt routes.Route) gin.HandlerFunc {
 			}
 			return
 		}
+		if rt.Stream {
+			s.streamFile(c, rt, body, tok)
+			return
+		}
 		out, err := s.caller.Call(c.Request.Context(), rt, body, tok)
 		if err != nil {
 			s.writeError(c, rt, err)
@@ -628,6 +649,10 @@ func (s *Server) anonymousDownload(rt routes.Route) gin.HandlerFunc {
 			fail(c, http.StatusBadGateway, "unavailable", "upstream authorization is unavailable")
 			return
 		}
+		if rt.Stream {
+			s.streamFile(c, rt, body, tok)
+			return
+		}
 		out, err := s.caller.Call(c.Request.Context(), rt, body, tok)
 		if err != nil {
 			s.writeError(c, rt, err)
@@ -635,6 +660,66 @@ func (s *Server) anonymousDownload(rt routes.Route) gin.HandlerFunc {
 		}
 		s.writeFile(c, rt, out)
 	}
+}
+
+// streamWriteWindow is how long one chunk of a streamed download may take to reach the client. The server's
+// WriteTimeout would cut a large download at once; the deadline moves on after every chunk, so only a client that
+// stalls is cut.
+const streamWriteWindow = 30 * time.Second
+
+// streamFile answers a download route with stream: true. The first chunk gives the headers (the file name and the
+// size, so the browser shows the progress), every chunk is written and flushed as it arrives: the file is never
+// held whole. An error before the first byte is an ordinary error answer; after it the connection is aborted, so
+// the client sees a failed download and not a short file.
+func (s *Server) streamFile(c *gin.Context, rt routes.Route, body []byte, tok string) {
+	rc := http.NewResponseController(c.Writer)
+	var (
+		started bool
+		want    int64
+		wrote   int64
+	)
+	err := s.caller.CallStream(c.Request.Context(), rt, body, tok, func(m *dynamicpb.Message) error {
+		d := m.Descriptor().Fields()
+		if !started {
+			started = true
+			name := m.Get(d.ByName("filename")).String()
+			if name == "" {
+				name = "download"
+			}
+			want = m.Get(d.ByName("size")).Int()
+			c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+			c.Header("Content-Type", "application/octet-stream")
+			c.Header("Content-Length", strconv.FormatInt(want, 10))
+			c.Status(http.StatusOK)
+		}
+		data := m.Get(d.ByName("data")).Bytes()
+		_ = rc.SetWriteDeadline(s.now().Add(streamWriteWindow))
+		n, err := c.Writer.Write(data)
+		wrote += int64(n)
+		if err != nil {
+			return err
+		}
+		c.Writer.Flush()
+		return nil
+	})
+	if err == nil && started && wrote == want {
+		return
+	}
+	if err == nil {
+		if !started {
+			err = errors.New("the stream carried no message")
+		} else {
+			err = errors.New("the stream ended before the whole file")
+		}
+	}
+	if !started {
+		s.writeError(c, rt, err)
+		return
+	}
+	if c.Request.Context().Err() == nil {
+		s.log.Error("download stream broke", zap.Error(err), zap.String("grpc", rt.GRPC), zap.Int64("wrote", wrote), zap.Int64("size", want))
+	}
+	panic(http.ErrAbortHandler)
 }
 
 // writeFile answers a download route: the reply has `filename` and `data` (base64 in the JSON).
@@ -711,9 +796,11 @@ func (s *Server) writeError(c *gin.Context, rt routes.Route, err error) {
 	msg := st.Message()
 	if httpCode >= 500 {
 		s.log.Error("upstream error", zap.Error(err), zap.String("upstream", rt.Upstream), zap.String("grpc", rt.GRPC))
-		msg = "the service failed to process the request"
+		fail(c, httpCode, code, "the service failed to process the request") // no internal reason leaves the gateway
+		return
 	}
-	fail(c, httpCode, code, msg)
+	reason, params := apperror.ReasonOf(st)
+	fail(c, httpCode, code, msg, failure{reason: reason, params: params})
 }
 
 func mapCode(c codes.Code) (int, string) {

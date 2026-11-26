@@ -51,3 +51,15 @@ func TestArgoCDSettingsGoTogether(t *testing.T) {
 		}
 	}
 }
+
+func TestUpstreamMaxRecvBytesHasAFloor(t *testing.T) {
+	c := Gatekeeper{Port: 8080, PublicURL: "https://api.example.com", UpstreamMaxRecvBytes: 1 << 20}
+	c.Env = "production"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.UpstreamMaxRecvBytes = 1000
+	if c.Validate() == nil {
+		t.Error("a limit under 1 MiB must fail")
+	}
+}

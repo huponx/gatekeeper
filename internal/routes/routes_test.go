@@ -33,19 +33,20 @@ func TestParse(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
-		"no permission":    "  - {http: GET /a, grpc: p.S/M, upstream: courier}\n",
-		"both":             "  - {http: GET /a, grpc: p.S/M, upstream: courier, permission: a:b, public: true}\n",
-		"bad method":       "  - {http: TRACE /a, grpc: p.S/M, upstream: courier, public: true}\n",
-		"no slash":         "  - {http: GET a, grpc: p.S/M, upstream: courier, public: true}\n",
-		"reserved":         "  - {http: GET /auth/me, grpc: p.S/M, upstream: courier, public: true}\n",
-		"unknown upstream": "  - {http: GET /a, grpc: p.S/M, upstream: nope, public: true}\n",
-		"bad grpc":         "  - {http: GET /a, grpc: p.S, upstream: courier, public: true}\n",
-		"duplicate":        "  - {http: GET /a, grpc: p.S/M, upstream: courier, public: true}\n  - {http: GET /a, grpc: p.S/N, upstream: courier, public: true}\n",
-		"anonymous post":   "  - {http: POST /a, grpc: p.S/M, upstream: courier, anonymous: true, download: true}\n",
-		"anonymous json":   "  - {http: GET /a, grpc: p.S/M, upstream: courier, anonymous: true}\n",
-		"anonymous+perm":   "  - {http: GET /a, grpc: p.S/M, upstream: courier, anonymous: true, download: true, permission: a:b}\n",
-		"download post":    "  - {http: POST /a, grpc: p.S/M, upstream: courier, public: true, download: true}\n",
-		"unknown field":    "  - {http: GET /a, grpc: p.S/M, upstream: courier, public: true, perm: x}\n",
+		"no permission":      "  - {http: GET /a, grpc: p.S/M, upstream: courier}\n",
+		"both":               "  - {http: GET /a, grpc: p.S/M, upstream: courier, permission: a:b, public: true}\n",
+		"bad method":         "  - {http: TRACE /a, grpc: p.S/M, upstream: courier, public: true}\n",
+		"no slash":           "  - {http: GET a, grpc: p.S/M, upstream: courier, public: true}\n",
+		"reserved":           "  - {http: GET /auth/me, grpc: p.S/M, upstream: courier, public: true}\n",
+		"unknown upstream":   "  - {http: GET /a, grpc: p.S/M, upstream: nope, public: true}\n",
+		"bad grpc":           "  - {http: GET /a, grpc: p.S, upstream: courier, public: true}\n",
+		"duplicate":          "  - {http: GET /a, grpc: p.S/M, upstream: courier, public: true}\n  - {http: GET /a, grpc: p.S/N, upstream: courier, public: true}\n",
+		"anonymous post":     "  - {http: POST /a, grpc: p.S/M, upstream: courier, anonymous: true, download: true}\n",
+		"anonymous json":     "  - {http: GET /a, grpc: p.S/M, upstream: courier, anonymous: true}\n",
+		"anonymous+perm":     "  - {http: GET /a, grpc: p.S/M, upstream: courier, anonymous: true, download: true, permission: a:b}\n",
+		"download post":      "  - {http: POST /a, grpc: p.S/M, upstream: courier, public: true, download: true}\n",
+		"stream no download": "  - {http: GET /a, grpc: p.S/M, upstream: courier, public: true, stream: true}\n",
+		"unknown field":      "  - {http: GET /a, grpc: p.S/M, upstream: courier, public: true, perm: x}\n",
 	}
 	for name, body := range cases {
 		if _, err := Parse([]byte(head + body)); err == nil {
@@ -72,8 +73,12 @@ func TestChartRoutes(t *testing.T) {
 	}
 	for _, r := range tbl.Routes {
 		if r.Anonymous { // no session: only the download of a deck, the token in the path is the authorization
-			if r.Method != "GET" || !r.Download || !strings.HasPrefix(r.Path, "/api/dictionary/downloads/") {
-				t.Errorf("%s %s: anonymous routes are only for the deck download", r.Method, r.Path)
+			if r.Method != "GET" || !r.Download ||
+				(!strings.HasPrefix(r.Path, "/api/dictionary/downloads/") && !strings.HasPrefix(r.Path, "/api/dictionary/export-downloads/")) {
+				t.Errorf("%s %s: anonymous routes are only for the deck downloads", r.Method, r.Path)
+			}
+			if r.Stream != strings.HasPrefix(r.Path, "/api/dictionary/export-downloads/") {
+				t.Errorf("%s %s: only the download of an export part streams", r.Method, r.Path)
 			}
 			continue
 		}
@@ -89,11 +94,14 @@ func TestChartRoutes(t *testing.T) {
 	}
 	// the settings of the dictionary: the system ones need their own permissions, the own ones only the word read
 	want := map[string]string{
-		"GET /api/dictionary/settings":    "dictionary:settings:read",
-		"PUT /api/dictionary/settings":    "dictionary:settings:write",
-		"GET /api/dictionary/me/settings": "dictionary:word:read",
-		"PUT /api/dictionary/me/settings": "dictionary:word:read",
-		"PUT /api/ui-style":               "identity:settings:write",
+		"GET /api/dictionary/settings":              "dictionary:settings:read",
+		"PUT /api/dictionary/settings":              "dictionary:settings:write",
+		"GET /api/dictionary/me/settings":           "dictionary:word:read",
+		"PUT /api/dictionary/me/settings":           "dictionary:word:read",
+		"GET /api/dictionary/users/{user_id}/quota": "dictionary:settings:read",
+		"PUT /api/dictionary/users/{user_id}/quota": "dictionary:settings:write",
+		"GET /api/dictionary/me/storage":            "dictionary:word:read",
+		"PUT /api/ui-style":                         "identity:settings:write",
 	}
 	for _, r := range tbl.Routes {
 		key := r.Method + " " + r.Path

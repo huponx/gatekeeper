@@ -3,6 +3,7 @@ package bff
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,10 +12,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/huponx/gatekeeper/internal/routes"
+	"github.com/huponx/gocommon/apperror"
 	"github.com/huponx/gocommon/jwtx"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 var uiOrigins = []string{"https://dict.example.com", "https://bill.example.com"}
@@ -142,6 +149,51 @@ type fakeCaller struct {
 	gotToken string
 	reply    string
 	err      error
+	// CallStream sends these messages (filename, size, data), then returns streamErr; afterChunk runs after each is handled.
+	chunks     []chunk
+	streamErr  error
+	afterChunk func(i int)
+}
+
+type chunk struct {
+	filename string
+	size     int64
+	data     string
+}
+
+func (f *fakeCaller) CallStream(_ context.Context, r routes.Route, body []byte, token string, fn func(*dynamicpb.Message) error) error {
+	f.gotBody, f.gotToken = string(body), token
+	md := chunkDescriptor()
+	for i, c := range f.chunks {
+		m := dynamicpb.NewMessage(md)
+		m.Set(md.Fields().ByName("filename"), protoreflect.ValueOfString(c.filename))
+		m.Set(md.Fields().ByName("size"), protoreflect.ValueOfInt64(c.size))
+		m.Set(md.Fields().ByName("data"), protoreflect.ValueOfBytes([]byte(c.data)))
+		if err := fn(m); err != nil {
+			return err
+		}
+		if f.afterChunk != nil {
+			f.afterChunk(i)
+		}
+	}
+	return f.streamErr
+}
+
+// chunkDescriptor is the shape of dictionary.v1.DownloadChunk.
+func chunkDescriptor() protoreflect.MessageDescriptor {
+	opt := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum()
+	fd, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+		Name: proto.String("chunk.proto"), Package: proto.String("t"), Syntax: proto.String("proto3"),
+		MessageType: []*descriptorpb.DescriptorProto{{Name: proto.String("Chunk"), Field: []*descriptorpb.FieldDescriptorProto{
+			{Name: proto.String("filename"), Number: proto.Int32(10), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), Label: opt},
+			{Name: proto.String("size"), Number: proto.Int32(20), Type: descriptorpb.FieldDescriptorProto_TYPE_INT64.Enum(), Label: opt},
+			{Name: proto.String("data"), Number: proto.Int32(30), Type: descriptorpb.FieldDescriptorProto_TYPE_BYTES.Enum(), Label: opt},
+		}}},
+	}, nil)
+	if err != nil {
+		panic(err)
+	}
+	return fd.Messages().ByName("Chunk")
 }
 
 func (f *fakeCaller) Call(_ context.Context, _ routes.Route, body []byte, token string) ([]byte, error) {
@@ -214,5 +266,106 @@ func TestInvalidStateRestartsLoginOnce(t *testing.T) {
 	w = do(r, http.MethodGet, "/auth/callback?state=abc&code=x", map[string]string{"Cookie": retry.Name + "=" + retry.Value})
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_state") {
 		t.Fatalf("second failure: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func streamServer(t *testing.T, fc *fakeCaller) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	tbl, err := routes.Parse([]byte("upstreams:\n  dictionary: {target: d:9090}\nroutes:\n" +
+		"  - {http: \"GET /api/dictionary/export-downloads/{token}\", grpc: dictionary.v1.DictionaryService/DownloadExportPart, upstream: dictionary, anonymous: true, download: true, stream: true}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{PublicURL: "https://api.example.com", Origins: uiOrigins, Secure: true}, nil, nil, nil, fc, fakeExch{}, tbl, zap.NewNop())
+	r := gin.New()
+	s.Routes(r)
+	return r
+}
+
+const partURL = "/api/dictionary/export-downloads/abc123.apkg"
+
+// A streamed part: the headers come from the first chunk (the size is the Content-Length) and every chunk is written
+// as it arrives, not after the last one.
+func TestStreamedDownloadWritesChunksAsTheyArrive(t *testing.T) {
+	fc := &fakeCaller{chunks: []chunk{{"Mi deck (part 1).apkg", 9, "abc"}, {data: "def"}, {data: "ghi"}}}
+	r := streamServer(t, fc)
+	req := httptest.NewRequest(http.MethodGet, partURL, nil)
+	w := httptest.NewRecorder()
+	fc.afterChunk = func(i int) {
+		if want := []string{"abc", "abcdef", "abcdefghi"}[i]; w.Body.String() != want {
+			t.Errorf("after chunk %d the client has %q, want %q", i, w.Body.String(), want)
+		}
+		if !w.Flushed {
+			t.Errorf("chunk %d was not flushed", i)
+		}
+	}
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || w.Body.String() != "abcdefghi" {
+		t.Fatalf("status %d body %q", w.Code, w.Body.String())
+	}
+	if fc.gotBody != `{"token":"abc123"}` || fc.gotToken != "svc-dictionary" {
+		t.Errorf("call: body %q token %q", fc.gotBody, fc.gotToken)
+	}
+	h := w.Header()
+	if h.Get("Content-Length") != "9" || h.Get("Content-Type") != "application/octet-stream" ||
+		!strings.HasPrefix(h.Get("Content-Disposition"), "attachment;") || !strings.Contains(h.Get("Content-Disposition"), "Mi deck (part 1).apkg") {
+		t.Errorf("headers: %v", h)
+	}
+	if h.Get("Cache-Control") != "no-store" {
+		t.Errorf("cache control %q", h.Get("Cache-Control"))
+	}
+}
+
+func TestStreamedDownloadErrorBeforeTheFirstByteIsJSON(t *testing.T) {
+	fc := &fakeCaller{streamErr: status.Error(codes.NotFound, "the download link does not exist or has expired")}
+	w := do(streamServer(t, fc), http.MethodGet, partURL, nil)
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "not_found") || w.Header().Get("Content-Disposition") != "" {
+		t.Errorf("status %d body %q headers %v", w.Code, w.Body.String(), w.Header())
+	}
+}
+
+// After the first byte the status is gone: the connection is aborted (a panic net/http understands), never a short file
+// that looks complete.
+func TestStreamedDownloadBreaksTheConnectionWhenTheStreamFailsMidway(t *testing.T) {
+	for name, fc := range map[string]*fakeCaller{
+		"upstream error": {chunks: []chunk{{"f.apkg", 6, "abc"}}, streamErr: status.Error(codes.Internal, "disk")},
+		"ends early":     {chunks: []chunk{{"f.apkg", 6, "abc"}}},
+	} {
+		func() {
+			defer func() {
+				if v := recover(); v != http.ErrAbortHandler {
+					t.Errorf("%s: recovered %v, want http.ErrAbortHandler", name, v)
+				}
+			}()
+			do(streamServer(t, fc), http.MethodGet, partURL, nil)
+		}()
+	}
+}
+
+func TestStreamedErrorCarriesTheReasonForTheClientToTranslate(t *testing.T) {
+	fc := &fakeCaller{streamErr: apperror.FailedPrecondition("this is the last admin").WithReason("last_admin", "limit", "1")}
+	w := do(streamServer(t, fc), http.MethodGet, partURL, nil)
+	var body struct {
+		Error struct {
+			Code, Reason, Message string
+			Params                map[string]string
+		}
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", w.Body.String(), err)
+	}
+	e := body.Error
+	if w.Code != http.StatusPreconditionFailed || e.Code != "failed_precondition" || e.Reason != "last_admin" ||
+		e.Params["limit"] != "1" || e.Message != "this is the last admin" {
+		t.Errorf("status %d error %+v", w.Code, e)
+	}
+}
+
+func TestServerErrorsDoNotLeakTheReason(t *testing.T) {
+	fc := &fakeCaller{streamErr: apperror.Internal("disk /var/x is full").WithReason("disk_full")}
+	w := do(streamServer(t, fc), http.MethodGet, partURL, nil)
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "disk") || strings.Contains(w.Body.String(), "reason") {
+		t.Errorf("status %d body %q", w.Code, w.Body.String())
 	}
 }

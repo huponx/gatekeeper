@@ -5,9 +5,10 @@
 # here is validated by `go test ./internal/routes`, released with the gateway and deployed by the
 # mm-deploy bump PR. Upstream addresses come from the chart values (`routes.upstreams`).
 #
-# Each `permission` is the one the identity method itself requires (identity/internal/service
-# Permissions): the exchanged token carries the user's permissions, identity checks them again, and
-# gatekeeper refuses early with 403.
+# A route has no permission here. Who may call it is the `authz.v1.rule` option of the RPC in protos (any_of, all_of
+# or public), read from descriptors.binpb: gatekeeper refuses early with 403 by the same rule the service enforces, so
+# the two cannot disagree. A route whose RPC has no rule does not load. Rebuild descriptors.binpb (make descriptors)
+# when a rule changes. `anonymous: true` stays a property of the route.
 #
 # Request mapping: path parameters, query string and JSON body are merged into the gRPC request
 # message (path wins), so `{user_id}` fills `user_id`. Gin needs one name per path position:
@@ -17,57 +18,71 @@
 # gateway accepts bodies up to 1 MiB).
 routes:
   # roles
-  - {http: "GET /api/roles", grpc: identity.v1.IdentityService/ListRoles, upstream: identity, permission: "identity:role:read"}
-  - {http: "POST /api/roles", grpc: identity.v1.IdentityService/CreateRole, upstream: identity, permission: "identity:role:write"}
-  - {http: "PUT /api/roles/{role}", grpc: identity.v1.IdentityService/UpdateRole, upstream: identity, permission: "identity:role:write"}
-  - {http: "DELETE /api/roles/{role}", grpc: identity.v1.IdentityService/DeleteRole, upstream: identity, permission: "identity:role:write"}
-  - {http: "PUT /api/roles/{role}/permissions", grpc: identity.v1.IdentityService/SetRolePermissions, upstream: identity, permission: "identity:role:write"}
-  - {http: "GET /api/permissions", grpc: identity.v1.IdentityService/ListPermissions, upstream: identity, permission: "identity:permission:read"}
-  - {http: "POST /api/permissions", grpc: identity.v1.IdentityService/CreatePermission, upstream: identity, permission: "identity:permission:write"}
-  - {http: "PUT /api/permissions/{permission}", grpc: identity.v1.IdentityService/UpdatePermission, upstream: identity, permission: "identity:permission:write"}
-  - {http: "DELETE /api/permissions/{permission}", grpc: identity.v1.IdentityService/DeletePermission, upstream: identity, permission: "identity:permission:write"}
-  - {http: "POST /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/AssignRole, upstream: identity, permission: "identity:role:write"}
-  - {http: "DELETE /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/RevokeRole, upstream: identity, permission: "identity:role:write"}
+  - {http: "GET /api/roles", grpc: identity.v1.IdentityService/ListRoles, upstream: identity}
+  - {http: "POST /api/roles", grpc: identity.v1.IdentityService/CreateRole, upstream: identity}
+  - {http: "PUT /api/roles/{role}", grpc: identity.v1.IdentityService/UpdateRole, upstream: identity}
+  - {http: "DELETE /api/roles/{role}", grpc: identity.v1.IdentityService/DeleteRole, upstream: identity}
+  - {http: "PUT /api/roles/{role}/permissions", grpc: identity.v1.IdentityService/SetRolePermissions, upstream: identity}
+  - {http: "GET /api/permissions", grpc: identity.v1.IdentityService/ListPermissions, upstream: identity}
+  - {http: "POST /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/AssignRole, upstream: identity}
+  - {http: "DELETE /api/roles/{role}/assignments", grpc: identity.v1.IdentityService/RevokeRole, upstream: identity}
   # clients
-  - {http: "GET /api/clients", grpc: identity.v1.IdentityService/ListClients, upstream: identity, permission: "identity:client:read"}
-  - {http: "POST /api/clients", grpc: identity.v1.IdentityService/CreateClient, upstream: identity, permission: "identity:client:write"}
-  - {http: "PUT /api/clients/{client_id}", grpc: identity.v1.IdentityService/UpdateClient, upstream: identity, permission: "identity:client:write"}
-  - {http: "PUT /api/clients/{client_id}/disabled", grpc: identity.v1.IdentityService/SetClientDisabled, upstream: identity, permission: "identity:client:write"}
-  - {http: "DELETE /api/clients/{client_id}", grpc: identity.v1.IdentityService/DeleteClient, upstream: identity, permission: "identity:client:write"}
-  - {http: "POST /api/clients/{client_id}/rotate-secret", grpc: identity.v1.IdentityService/RotateClientSecret, upstream: identity, permission: "identity:client:write"}
+  - {http: "GET /api/clients", grpc: identity.v1.IdentityService/ListClients, upstream: identity}
+  - {http: "POST /api/clients", grpc: identity.v1.IdentityService/CreateClient, upstream: identity}
+  - {http: "PUT /api/clients/{client_id}", grpc: identity.v1.IdentityService/UpdateClient, upstream: identity}
+  - {http: "PUT /api/clients/{client_id}/disabled", grpc: identity.v1.IdentityService/SetClientDisabled, upstream: identity}
+  - {http: "DELETE /api/clients/{client_id}", grpc: identity.v1.IdentityService/DeleteClient, upstream: identity}
+  - {http: "POST /api/clients/{client_id}/rotate-secret", grpc: identity.v1.IdentityService/RotateClientSecret, upstream: identity}
   # token exchange policies
-  - {http: "GET /api/exchange-policies", grpc: identity.v1.IdentityService/ListExchangePolicies, upstream: identity, permission: "identity:exchange:read"}
-  - {http: "PUT /api/exchange-policies", grpc: identity.v1.IdentityService/SetExchangePolicy, upstream: identity, permission: "identity:exchange:write"}
+  - {http: "GET /api/exchange-policies", grpc: identity.v1.IdentityService/ListExchangePolicies, upstream: identity}
+  - {http: "PUT /api/exchange-policies", grpc: identity.v1.IdentityService/SetExchangePolicy, upstream: identity}
   # users
-  - {http: "GET /api/users", grpc: identity.v1.IdentityService/ListUsers, upstream: identity, permission: "identity:user:read"}
-  - {http: "POST /api/users", grpc: identity.v1.IdentityService/CreateUser, upstream: identity, permission: "identity:user:write"}
-  - {http: "GET /api/users/{user_id}", grpc: identity.v1.IdentityService/GetUser, upstream: identity, permission: "identity:user:read"}
-  - {http: "PUT /api/users/{user_id}", grpc: identity.v1.IdentityService/UpdateUser, upstream: identity, permission: "identity:user:write"}
-  - {http: "PUT /api/users/{user_id}/avatar", grpc: identity.v1.IdentityService/SetUserAvatar, upstream: identity, permission: "identity:user:write"}
-  - {http: "POST /api/users/{user_id}/welcome", grpc: identity.v1.IdentityService/SendWelcome, upstream: identity, permission: "identity:user:write"}
-  - {http: "DELETE /api/users/{user_id}", grpc: identity.v1.IdentityService/DeleteUser, upstream: identity, permission: "identity:user:write"}
-  - {http: "PUT /api/users/{user_id}/disabled", grpc: identity.v1.IdentityService/SetUserDisabled, upstream: identity, permission: "identity:user:write"}
-  - {http: "PUT /api/users/{user_id}/password", grpc: identity.v1.IdentityService/SetUserPassword, upstream: identity, permission: "identity:user:write"}
-  - {http: "POST /api/users/{user_id}/password-reset", grpc: identity.v1.IdentityService/SendPasswordReset, upstream: identity, permission: "identity:user:write"}
-  - {http: "GET /api/user-stats", grpc: identity.v1.IdentityService/GetUserStats, upstream: identity, permission: "identity:user:read"}
-  # the signed-in user's own profile: any signed-in user, no permission (identity takes the user from the
-  # token, never from the request; `public` means signed in, never anonymous)
-  - {http: "GET /api/me", grpc: identity.v1.IdentityService/GetMe, upstream: identity, public: true}
-  - {http: "PUT /api/me", grpc: identity.v1.IdentityService/UpdateMe, upstream: identity, public: true}
-  - {http: "PUT /api/me/avatar", grpc: identity.v1.IdentityService/SetMyAvatar, upstream: identity, public: true}
-  - {http: "POST /api/me/password", grpc: identity.v1.IdentityService/ChangeMyPassword, upstream: identity, public: true}
-  - {http: "GET /api/me/mfa", grpc: identity.v1.IdentityService/GetMyMFA, upstream: identity, public: true}
-  - {http: "POST /api/me/mfa/setup", grpc: identity.v1.IdentityService/BeginMyMFA, upstream: identity, public: true}
-  - {http: "POST /api/me/mfa", grpc: identity.v1.IdentityService/ConfirmMyMFA, upstream: identity, public: true}
-  - {http: "POST /api/me/mfa/disable", grpc: identity.v1.IdentityService/DisableMyMFA, upstream: identity, public: true}
+  - {http: "GET /api/users", grpc: identity.v1.IdentityService/ListUsers, upstream: identity}
+  - {http: "POST /api/users", grpc: identity.v1.IdentityService/CreateUser, upstream: identity}
+  - {http: "GET /api/users/{user_id}", grpc: identity.v1.IdentityService/GetUser, upstream: identity}
+  - {http: "PUT /api/users/{user_id}", grpc: identity.v1.IdentityService/UpdateUser, upstream: identity}
+  - {http: "PUT /api/users/{user_id}/avatar", grpc: identity.v1.IdentityService/SetUserAvatar, upstream: identity}
+  - {http: "POST /api/users/{user_id}/welcome", grpc: identity.v1.IdentityService/SendWelcome, upstream: identity}
+  - {http: "POST /api/users/{user_id}/approve", grpc: identity.v1.IdentityService/ApproveUser, upstream: identity}
+  - {http: "POST /api/users/{user_id}/reject", grpc: identity.v1.IdentityService/RejectUser, upstream: identity}
+  - {http: "DELETE /api/users/{user_id}", grpc: identity.v1.IdentityService/DeleteUser, upstream: identity}
+  - {http: "PUT /api/users/{user_id}/disabled", grpc: identity.v1.IdentityService/SetUserDisabled, upstream: identity}
+  - {http: "PUT /api/users/{user_id}/password", grpc: identity.v1.IdentityService/SetUserPassword, upstream: identity}
+  - {http: "POST /api/users/{user_id}/password-reset", grpc: identity.v1.IdentityService/SendPasswordReset, upstream: identity}
+  - {http: "GET /api/users/{user_id}/sessions", grpc: identity.v1.IdentityService/ListUserSessions, upstream: identity}
+  - {http: "DELETE /api/users/{user_id}/sessions", grpc: identity.v1.IdentityService/RevokeUserSessions, upstream: identity}
+  - {http: "GET /api/user-stats", grpc: identity.v1.IdentityService/GetUserStats, upstream: identity}
+  # the signed-in user's own profile: any signed-in user (identity takes the user from the token, never from
+  # the request; `public` in the proto means signed in, never anonymous)
+  - {http: "GET /api/me", grpc: identity.v1.IdentityService/GetMe, upstream: identity}
+  - {http: "PUT /api/me", grpc: identity.v1.IdentityService/UpdateMe, upstream: identity}
+  - {http: "PUT /api/me/avatar", grpc: identity.v1.IdentityService/SetMyAvatar, upstream: identity}
+  - {http: "POST /api/me/password", grpc: identity.v1.IdentityService/ChangeMyPassword, upstream: identity}
+  - {http: "GET /api/me/mfa", grpc: identity.v1.IdentityService/GetMyMFA, upstream: identity}
+  - {http: "POST /api/me/mfa/setup", grpc: identity.v1.IdentityService/BeginMyMFA, upstream: identity}
+  - {http: "POST /api/me/mfa", grpc: identity.v1.IdentityService/ConfirmMyMFA, upstream: identity}
+  - {http: "POST /api/me/mfa/disable", grpc: identity.v1.IdentityService/DisableMyMFA, upstream: identity}
+  # the own passkeys (WebAuthn): the browser runs the ceremony, the options and the credential travel as JSON strings
+  - {http: "GET /api/me/passkeys", grpc: identity.v1.IdentityService/ListMyPasskeys, upstream: identity}
+  - {http: "POST /api/me/passkeys/begin", grpc: identity.v1.IdentityService/BeginMyPasskey, upstream: identity}
+  - {http: "POST /api/me/passkeys", grpc: identity.v1.IdentityService/FinishMyPasskey, upstream: identity}
+  - {http: "PUT /api/me/passkeys/{id}", grpc: identity.v1.IdentityService/RenameMyPasskey, upstream: identity}
+  - {http: "DELETE /api/me/passkeys/{id}", grpc: identity.v1.IdentityService/DeleteMyPasskey, upstream: identity}
+  # the own sessions (one per sign in on a browser or device): list, end one, end all but the current one
+  - {http: "GET /api/me/sessions", grpc: identity.v1.IdentityService/ListMySessions, upstream: identity}
+  - {http: "DELETE /api/me/sessions/{id}", grpc: identity.v1.IdentityService/RevokeMySession, upstream: identity}
+  - {http: "POST /api/me/sessions/revoke-others", grpc: identity.v1.IdentityService/RevokeMyOtherSessions, upstream: identity}
   # MFA per user
-  - {http: "GET /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/GetUserMFA, upstream: identity, permission: "identity:mfa:read"}
-  - {http: "PUT /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/SetUserMFA, upstream: identity, permission: "identity:mfa:write"}
-  - {http: "PUT /api/users/{user_id}/mfa/enforced", grpc: identity.v1.IdentityService/EnforceUserMFA, upstream: identity, permission: "identity:mfa:write"}
-  - {http: "POST /api/users/{user_id}/mfa/reset", grpc: identity.v1.IdentityService/ResetUserMFA, upstream: identity, permission: "identity:mfa:write"}
+  - {http: "GET /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/GetUserMFA, upstream: identity}
+  - {http: "PUT /api/users/{user_id}/mfa", grpc: identity.v1.IdentityService/SetUserMFA, upstream: identity}
+  - {http: "PUT /api/users/{user_id}/mfa/enforced", grpc: identity.v1.IdentityService/EnforceUserMFA, upstream: identity}
+  - {http: "POST /api/users/{user_id}/mfa/reset", grpc: identity.v1.IdentityService/ResetUserMFA, upstream: identity}
   # the look of the web apps, one value for the whole system: any signed-in user reads it, an administrator sets it
-  - {http: "GET /api/ui-style", grpc: identity.v1.IdentityService/GetUIStyle, upstream: identity, public: true}
-  - {http: "PUT /api/ui-style", grpc: identity.v1.IdentityService/SetUIStyle, upstream: identity, permission: "identity:settings:write"}
+  - {http: "GET /api/ui-style", grpc: identity.v1.IdentityService/GetUIStyle, upstream: identity}
+  - {http: "PUT /api/ui-style", grpc: identity.v1.IdentityService/SetUIStyle, upstream: identity}
+  # self-registration: does a new account wait for an administrator (read-only flag: is registration open at all)
+  - {http: "GET /api/registration-settings", grpc: identity.v1.IdentityService/GetRegistrationSettings, upstream: identity}
+  - {http: "PUT /api/registration-settings", grpc: identity.v1.IdentityService/SetRegistrationSettings, upstream: identity}
   # dictionary (look words up, keep a list of saved words, export it as an Anki deck); the user is the
   # token's, never a field of the request. `{word}`, `{id}` (images, audio) and `{token}` are the parameter names under /api/dictionary/.
   # POST /api/dictionary/export answers with the .apkg as base64 JSON (at most 3 MiB by default, 10 MiB at most).
@@ -77,49 +92,51 @@ routes:
 # gatekeeper calls dictionary with its own service token. `download: true` answers with the file.
 # `timeout: 40s` on the two exports: building a deck downloads the audio files (up to 20s) and the default
 # deadline of the gRPC client is 5s.
-  - {http: "GET /api/dictionary/words/{word}", grpc: dictionary.v1.DictionaryService/LookupWord, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "POST /api/dictionary/lookup", grpc: dictionary.v1.DictionaryService/LookupWords, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "GET /api/dictionary/saved", grpc: dictionary.v1.DictionaryService/ListSavedWords, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "POST /api/dictionary/saved/check", grpc: dictionary.v1.DictionaryService/CheckSavedWords, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "POST /api/dictionary/saved", grpc: dictionary.v1.DictionaryService/SaveWord, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "DELETE /api/dictionary/saved/{word}", grpc: dictionary.v1.DictionaryService/DeleteSavedWord, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "POST /api/dictionary/export", grpc: dictionary.v1.DictionaryService/ExportAnki, upstream: dictionary, permission: "dictionary:word:write", timeout: 40s}
-  - {http: "POST /api/dictionary/export-link", grpc: dictionary.v1.DictionaryService/CreateDeckLink, upstream: dictionary, permission: "dictionary:word:write", timeout: 40s}
+  - {http: "GET /api/dictionary/dictionaries", grpc: dictionary.v1.DictionaryService/ListDictionaries, upstream: dictionary}
+  - {http: "GET /api/dictionary/words/{word}", grpc: dictionary.v1.DictionaryService/LookupWord, upstream: dictionary}
+  - {http: "POST /api/dictionary/lookup", grpc: dictionary.v1.DictionaryService/LookupWords, upstream: dictionary}
+  - {http: "GET /api/dictionary/saved", grpc: dictionary.v1.DictionaryService/ListSavedWords, upstream: dictionary}
+  - {http: "POST /api/dictionary/saved/check", grpc: dictionary.v1.DictionaryService/CheckSavedWords, upstream: dictionary}
+  - {http: "POST /api/dictionary/saved", grpc: dictionary.v1.DictionaryService/SaveWord, upstream: dictionary}
+  - {http: "DELETE /api/dictionary/saved/{word}", grpc: dictionary.v1.DictionaryService/DeleteSavedWord, upstream: dictionary}
+  - {http: "POST /api/dictionary/export", grpc: dictionary.v1.DictionaryService/ExportAnki, upstream: dictionary, timeout: 40s}
+  - {http: "POST /api/dictionary/export-link", grpc: dictionary.v1.DictionaryService/CreateDeckLink, upstream: dictionary, timeout: 40s}
   # export of a long list in parts (a job): start, state (id "latest" is the job started last), cancel, and the
   # link of a part, which the anonymous GET /api/dictionary/export-downloads/{token}.apkg serves many times until the job
   # expires. `stream: true`: dictionary streams the file in chunks and gatekeeper writes them as they arrive, so a part
   # larger than a gRPC message (up to 50 MiB) is never held whole; `timeout: 30m` is the deadline of the whole stream
   # (the write deadline of every chunk, 30s, cuts a client that stalls).
-  - {http: "POST /api/dictionary/exports", grpc: dictionary.v1.DictionaryService/StartExport, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "GET /api/dictionary/exports/{id}", grpc: dictionary.v1.DictionaryService/GetExport, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "POST /api/dictionary/exports/{id}/cancel", grpc: dictionary.v1.DictionaryService/CancelExport, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "POST /api/dictionary/exports/{id}/parts/{n}/link", grpc: dictionary.v1.DictionaryService/CreateExportPartLink, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "POST /api/dictionary/saved-words/remove-exported", grpc: dictionary.v1.DictionaryService/RemoveExportedWords, upstream: dictionary, permission: "dictionary:word:write"}
+  - {http: "POST /api/dictionary/exports", grpc: dictionary.v1.DictionaryService/StartExport, upstream: dictionary}
+  - {http: "GET /api/dictionary/exports/{id}", grpc: dictionary.v1.DictionaryService/GetExport, upstream: dictionary}
+  - {http: "POST /api/dictionary/exports/{id}/cancel", grpc: dictionary.v1.DictionaryService/CancelExport, upstream: dictionary}
+  - {http: "POST /api/dictionary/exports/{id}/parts/{n}/link", grpc: dictionary.v1.DictionaryService/CreateExportPartLink, upstream: dictionary}
+  - {http: "POST /api/dictionary/saved-words/remove-exported", grpc: dictionary.v1.DictionaryService/RemoveExportedWords, upstream: dictionary}
   # categories of the saved words (a word may have several); {id} is the category id
-  - {http: "GET /api/dictionary/categories", grpc: dictionary.v1.DictionaryService/ListCategories, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "POST /api/dictionary/categories", grpc: dictionary.v1.DictionaryService/CreateCategory, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "PATCH /api/dictionary/categories/{id}", grpc: dictionary.v1.DictionaryService/RenameCategory, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "DELETE /api/dictionary/categories/{id}", grpc: dictionary.v1.DictionaryService/DeleteCategory, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "POST /api/dictionary/saved-words/categories", grpc: dictionary.v1.DictionaryService/UpdateWordCategories, upstream: dictionary, permission: "dictionary:word:write"}
+  - {http: "GET /api/dictionary/categories", grpc: dictionary.v1.DictionaryService/ListCategories, upstream: dictionary}
+  - {http: "POST /api/dictionary/categories", grpc: dictionary.v1.DictionaryService/CreateCategory, upstream: dictionary}
+  - {http: "PATCH /api/dictionary/categories/{id}", grpc: dictionary.v1.DictionaryService/RenameCategory, upstream: dictionary}
+  - {http: "DELETE /api/dictionary/categories/{id}", grpc: dictionary.v1.DictionaryService/DeleteCategory, upstream: dictionary}
+  - {http: "POST /api/dictionary/saved-words/categories", grpc: dictionary.v1.DictionaryService/UpdateWordCategories, upstream: dictionary}
   # card images: JSON with base64 (at most 1 MiB, the body limit); the card content refers to them as dictimg:<id>
-  - {http: "POST /api/dictionary/images", grpc: dictionary.v1.DictionaryService/UploadImage, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "GET /api/dictionary/images/{id}", grpc: dictionary.v1.DictionaryService/GetImage, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "POST /api/dictionary/images", grpc: dictionary.v1.DictionaryService/UploadImage, upstream: dictionary}
+  - {http: "GET /api/dictionary/images/{id}", grpc: dictionary.v1.DictionaryService/GetImage, upstream: dictionary}
   # card audio: same mechanism, at most about 700 KiB of file (base64 inside the 1 MiB body limit); the card refers to it as dictaud:<id>
-  - {http: "POST /api/dictionary/audio", grpc: dictionary.v1.DictionaryService/UploadAudio, upstream: dictionary, permission: "dictionary:word:write"}
-  - {http: "GET /api/dictionary/audio/{id}", grpc: dictionary.v1.DictionaryService/GetAudio, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "POST /api/dictionary/audio", grpc: dictionary.v1.DictionaryService/UploadAudio, upstream: dictionary}
+  - {http: "GET /api/dictionary/audio/{id}", grpc: dictionary.v1.DictionaryService/GetAudio, upstream: dictionary}
   # review (spaced repetition of the saved words)
-  - {http: "GET /api/dictionary/review", grpc: dictionary.v1.DictionaryService/GetReviewQueue, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "POST /api/dictionary/review", grpc: dictionary.v1.DictionaryService/SubmitReview, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "POST /api/dictionary/review/bonus", grpc: dictionary.v1.DictionaryService/AddReviewBonus, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "POST /api/dictionary/review/optimize", grpc: dictionary.v1.DictionaryService/OptimizeReviewParameters, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "GET /api/dictionary/review", grpc: dictionary.v1.DictionaryService/GetReviewQueue, upstream: dictionary}
+  - {http: "POST /api/dictionary/review", grpc: dictionary.v1.DictionaryService/SubmitReview, upstream: dictionary}
+  - {http: "POST /api/dictionary/review/bonus", grpc: dictionary.v1.DictionaryService/AddReviewBonus, upstream: dictionary}
+  - {http: "POST /api/dictionary/review/optimize", grpc: dictionary.v1.DictionaryService/OptimizeReviewParameters, upstream: dictionary}
   # settings: the whole system (administrators) and the preferences of the signed in user
-  - {http: "GET /api/dictionary/settings", grpc: dictionary.v1.DictionaryService/GetSettings, upstream: dictionary, permission: "dictionary:settings:read"}
-  - {http: "PUT /api/dictionary/settings", grpc: dictionary.v1.DictionaryService/UpdateSettings, upstream: dictionary, permission: "dictionary:settings:write"}
+  - {http: "GET /api/dictionary/settings", grpc: dictionary.v1.DictionaryService/GetSettings, upstream: dictionary}
+  - {http: "PUT /api/dictionary/settings", grpc: dictionary.v1.DictionaryService/UpdateSettings, upstream: dictionary}
   # the limits of one user (administrators) and what the signed in user stores
-  - {http: "GET /api/dictionary/users/{user_id}/quota", grpc: dictionary.v1.DictionaryService/GetUserQuota, upstream: dictionary, permission: "dictionary:settings:read"}
-  - {http: "PUT /api/dictionary/users/{user_id}/quota", grpc: dictionary.v1.DictionaryService/SetUserQuota, upstream: dictionary, permission: "dictionary:settings:write"}
-  - {http: "GET /api/dictionary/me/storage", grpc: dictionary.v1.DictionaryService/GetMyStorage, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "GET /api/dictionary/me/settings", grpc: dictionary.v1.DictionaryService/GetMySettings, upstream: dictionary, permission: "dictionary:word:read"}
-  - {http: "PUT /api/dictionary/me/settings", grpc: dictionary.v1.DictionaryService/UpdateMySettings, upstream: dictionary, permission: "dictionary:word:read"}
+  - {http: "GET /api/dictionary/users/{user_id}/quota", grpc: dictionary.v1.DictionaryService/GetUserQuota, upstream: dictionary}
+  - {http: "PUT /api/dictionary/users/{user_id}/quota", grpc: dictionary.v1.DictionaryService/SetUserQuota, upstream: dictionary}
+  - {http: "POST /api/dictionary/users/{user_id}/storage/recalculate", grpc: dictionary.v1.DictionaryService/RecalculateUserStorage, upstream: dictionary}
+  - {http: "GET /api/dictionary/me/storage", grpc: dictionary.v1.DictionaryService/GetMyStorage, upstream: dictionary}
+  - {http: "GET /api/dictionary/me/settings", grpc: dictionary.v1.DictionaryService/GetMySettings, upstream: dictionary}
+  - {http: "PUT /api/dictionary/me/settings", grpc: dictionary.v1.DictionaryService/UpdateMySettings, upstream: dictionary}
   - {http: "GET /api/dictionary/downloads/{token}", grpc: dictionary.v1.DictionaryService/DownloadDeck, upstream: dictionary, anonymous: true, download: true}
   - {http: "GET /api/dictionary/export-downloads/{token}", grpc: dictionary.v1.DictionaryService/DownloadExportPart, upstream: dictionary, anonymous: true, download: true, stream: true, timeout: 30m}

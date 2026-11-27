@@ -9,10 +9,10 @@
 //	    grpc: courier.v1.CourierService/SendNotification
 //	    upstream: courier
 //	    audience: courier                  # aud of the exchanged token, default: the upstream name
-//	    permission: courier:notification:send
 //
-// A route without "permission" is refused at load time unless it says `public: true`, which
-// means any signed-in user, or `anonymous: true` (a download link, see Route): deny by default.
+// A route has no permission of its own: who may call it is the `authz.v1.rule` option of the RPC in its proto
+// (any_of, all_of or public), read from the descriptor set, the same rule the service enforces. A route whose RPC has
+// none is refused at load time (deny by default), unless it says `anonymous: true` (a download link, see Route).
 package routes
 
 import (
@@ -22,8 +22,66 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huponx/gocommon/grpcserver"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"gopkg.in/yaml.v3"
 )
+
+// Rules finds the authorization rule of an RPC ("pkg.Service", "Method").
+type Rules interface {
+	Rule(service, rpc string) (grpcserver.Rule, bool)
+}
+
+// RuleMap is Rules over a map keyed "pkg.Service/Method" (tests).
+type RuleMap map[string]grpcserver.Rule
+
+func (m RuleMap) Rule(service, rpc string) (grpcserver.Rule, bool) {
+	r, ok := m[service+"/"+rpc]
+	return r, ok
+}
+
+type fileRules struct{ files *protoregistry.Files }
+
+// DescriptorRules reads the `authz.v1.rule` option of the methods of a descriptor set. A method with no rule, or
+// with more than one of any_of, all_of and public, is not found.
+func DescriptorRules(files *protoregistry.Files) Rules { return fileRules{files} }
+
+func (f fileRules) Rule(service, rpc string) (grpcserver.Rule, bool) {
+	d, err := f.files.FindDescriptorByName(protoreflect.FullName(service))
+	if err != nil {
+		return grpcserver.Rule{}, false
+	}
+	sd, ok := d.(protoreflect.ServiceDescriptor)
+	if !ok {
+		return grpcserver.Rule{}, false
+	}
+	md := sd.Methods().ByName(protoreflect.Name(rpc))
+	if md == nil {
+		return grpcserver.Rule{}, false
+	}
+	return grpcserver.RuleOf(md)
+}
+
+// LoadDescriptors reads a FileDescriptorSet (buf build -o descriptors.binpb).
+func LoadDescriptors(path string) (*protoregistry.Files, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var set descriptorpb.FileDescriptorSet
+	if err := proto.Unmarshal(b, &set); err != nil {
+		return nil, fmt.Errorf("descriptors: %w", err)
+	}
+	files, err := protodesc.NewFiles(&set)
+	if err != nil {
+		return nil, fmt.Errorf("descriptors: %w", err)
+	}
+	return files, nil
+}
 
 type Upstream struct {
 	Target string `yaml:"target"`
@@ -32,13 +90,10 @@ type Upstream struct {
 }
 
 type Route struct {
-	HTTP       string `yaml:"http"`
-	GRPC       string `yaml:"grpc"`
-	Upstream   string `yaml:"upstream"`
-	Audience   string `yaml:"audience"`
-	Permission string `yaml:"permission"`
-	// Public: any signed-in user may call (no permission needed). Never anonymous.
-	Public bool `yaml:"public"`
+	HTTP     string `yaml:"http"`
+	GRPC     string `yaml:"grpc"`
+	Upstream string `yaml:"upstream"`
+	Audience string `yaml:"audience"`
 	// Anonymous: no session at all, for a link that is itself the secret (the download of an Anki deck).
 	// Gatekeeper calls the upstream with its own service token. Only for a GET with `download: true`.
 	Anonymous bool `yaml:"anonymous"`
@@ -56,6 +111,8 @@ type Route struct {
 
 	Method string `yaml:"-"`
 	Path   string `yaml:"-"`
+	// Rule is who may call it, from the proto of the RPC (empty for an anonymous route, which has no session).
+	Rule grpcserver.Rule `yaml:"-"`
 	// Service and RPC are the halves of GRPC ("courier.v1.CourierService", "SendNotification").
 	Service string `yaml:"-"`
 	RPC     string `yaml:"-"`
@@ -68,19 +125,41 @@ type Table struct {
 	Descriptors string              `yaml:"descriptors"`
 	Upstreams   map[string]Upstream `yaml:"upstreams"`
 	Routes      []Route             `yaml:"routes"`
+
+	// Files is the loaded descriptor set (set by Load).
+	Files *protoregistry.Files `yaml:"-"`
 }
 
-// Load reads and validates a routes file.
+// Load reads and validates a routes file; its `descriptors` file gives the rule of every route.
 func Load(path string) (*Table, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return Parse(b)
+	var head struct {
+		Descriptors string `yaml:"descriptors"`
+	}
+	if err := yaml.Unmarshal(b, &head); err != nil {
+		return nil, fmt.Errorf("routes: %w", err)
+	}
+	if head.Descriptors == "" {
+		return nil, fmt.Errorf("routes: descriptors is required: the permission of a route is the authz rule of its RPC")
+	}
+	files, err := LoadDescriptors(head.Descriptors)
+	if err != nil {
+		return nil, err
+	}
+	t, err := Parse(b, DescriptorRules(files))
+	if err != nil {
+		return nil, err
+	}
+	t.Files = files
+	return t, nil
 }
 
-// Parse validates a routes document.
-func Parse(b []byte) (*Table, error) {
+// Parse validates a routes document. rules gives the authorization rule of each RPC: a route whose RPC has none is
+// refused, except an anonymous one.
+func Parse(b []byte, rules Rules) (*Table, error) {
 	var t Table
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
@@ -135,19 +214,16 @@ func Parse(b []byte) (*Table, error) {
 		if r.Anonymous && (method != http.MethodGet || !r.Download) {
 			return nil, fmt.Errorf("routes[%d] %s: anonymous is only for a GET with download: true", i, key)
 		}
-		if r.Permission == "" && !r.Public && !r.Anonymous {
-			return nil, fmt.Errorf("routes[%d] %s: set permission, or public: true for any signed-in user", i, key)
-		}
-		if n := b2i(r.Permission != "") + b2i(r.Public) + b2i(r.Anonymous); n > 1 {
-			return nil, fmt.Errorf("routes[%d] %s: permission, public and anonymous are exclusive", i, key)
+		if !r.Anonymous {
+			if rules == nil {
+				return nil, fmt.Errorf("routes[%d] %s: no descriptors to read the rule of %s from", i, key, r.GRPC)
+			}
+			rule, ok := rules.Rule(svc, rpc)
+			if !ok {
+				return nil, fmt.Errorf("routes[%d] %s: %s has no authz.v1.rule (exactly one of any_of, all_of, public) in its proto", i, key, r.GRPC)
+			}
+			r.Rule = rule
 		}
 	}
 	return &t, nil
-}
-
-func b2i(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

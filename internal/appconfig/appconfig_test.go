@@ -3,6 +3,7 @@ package appconfig
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestOriginsSeparators(t *testing.T) {
@@ -61,5 +62,24 @@ func TestUpstreamMaxRecvBytesHasAFloor(t *testing.T) {
 	c.UpstreamMaxRecvBytes = 1000
 	if c.Validate() == nil {
 		t.Error("a limit under 1 MiB must fail")
+	}
+}
+
+func TestValidatePortalURL(t *testing.T) {
+	for _, tc := range []struct {
+		env, url string
+		ok       bool
+	}{
+		{"prod", "", true},
+		{"prod", "https://portal.example.com", true},
+		{"prod", "http://portal.example.com", false},
+		{"local", "http://localhost:3004", true},
+		{"local", "/portal", false},
+	} {
+		c := Gatekeeper{PublicURL: "https://api.example.com", PortalURL: tc.url, Port: 8080, SessionIdleTTL: time.Hour, SessionAbsoluteTTL: time.Hour}
+		c.Env = tc.env
+		if err := c.Validate(); (err == nil) != tc.ok {
+			t.Errorf("env %q url %q: %v", tc.env, tc.url, err)
+		}
 	}
 }

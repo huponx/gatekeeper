@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/huponx/gatekeeper/internal/routes"
+	"github.com/huponx/gocommon/grpcserver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -87,9 +88,9 @@ func streamProxy(t *testing.T, send func(ctx context.Context, token string, out 
 routes:
   - {http: "GET /get/{token}", grpc: test.v1.Files/Get, upstream: files, anonymous: true, download: true, stream: true}
   - {http: "GET /plain/{token}", grpc: test.v1.Files/Get, upstream: files, anonymous: true, download: true}
-  - {http: GET /put, grpc: test.v1.Files/Put, upstream: files, public: true, download: true, stream: true}
-  - {http: GET /one, grpc: test.v1.Files/One, upstream: files, public: true, download: true, stream: true}
-`))
+  - {http: GET /put, grpc: test.v1.Files/Put, upstream: files, download: true, stream: true}
+  - {http: GET /one, grpc: test.v1.Files/One, upstream: files, download: true, stream: true}
+`), routes.RuleMap{"test.v1.Files/Put": grpcserver.PublicRule, "test.v1.Files/One": grpcserver.PublicRule})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/huponx/gatekeeper/internal/routes"
+	"github.com/huponx/gocommon/grpcserver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -53,10 +54,12 @@ func table(t *testing.T) *routes.Table {
 	tbl, err := routes.Parse([]byte(`upstreams:
   health: {target: x}
 routes:
-  - {http: GET /health, grpc: grpc.health.v1.Health/Check, upstream: health, public: true}
-  - {http: GET /nope, grpc: grpc.health.v1.Health/Missing, upstream: health, public: true}
-  - {http: GET /watch, grpc: grpc.health.v1.Health/Watch, upstream: health, public: true}
-`))
+  - {http: GET /health, grpc: grpc.health.v1.Health/Check, upstream: health}
+  - {http: GET /nope, grpc: grpc.health.v1.Health/Missing, upstream: health}
+  - {http: GET /watch, grpc: grpc.health.v1.Health/Watch, upstream: health}
+`), routes.RuleMap{
+		"grpc.health.v1.Health/Check": grpcserver.PublicRule, "grpc.health.v1.Health/Missing": grpcserver.PublicRule, "grpc.health.v1.Health/Watch": grpcserver.PublicRule,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

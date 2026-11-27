@@ -46,11 +46,12 @@ HTTP_PORT=$ID_HTTP PORT=$ID_GRPC "$tmp/identity" >"$tmp/identity.log" 2>&1 & ipi
 for _ in $(seq 1 50); do curl -fs "$IDENTITY_ISSUER/healthz" >/dev/null && break; sleep 0.2; done
 
 cat >"$tmp/routes.yaml" <<EOF
+descriptors: $PWD/descriptors.binpb
 upstreams:
   identity: {target: "localhost:$ID_GRPC"}
 routes:
-  - {http: GET /api/roles, grpc: identity.v1.IdentityService/ListRoles, upstream: identity, permission: "identity:role:read"}
-  - {http: POST /api/roles, grpc: identity.v1.IdentityService/CreateRole, upstream: identity, permission: "identity:role:write"}
+  - {http: GET /api/roles, grpc: identity.v1.IdentityService/ListRoles, upstream: identity}
+  - {http: POST /api/roles, grpc: identity.v1.IdentityService/CreateRole, upstream: identity}
 EOF
 
 PORT=$GK_PORT GATEKEEPER_PUBLIC_URL=http://localhost:$GK_PORT GATEKEEPER_ROUTES_FILE=$tmp/routes.yaml \

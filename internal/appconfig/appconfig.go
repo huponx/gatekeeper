@@ -48,6 +48,9 @@ type Gatekeeper struct {
 
 	// PostLoginURL is where the browser lands when login started without a return address.
 	PostLoginURL string `env:"GATEKEEPER_POST_LOGIN_URL" envDefault:"/"`
+	// PortalURL is the portal: GET / redirects there, and it is where login lands unless GATEKEEPER_POST_LOGIN_URL
+	// says otherwise. Optional; without it GET / answers 404.
+	PortalURL string `env:"GATEKEEPER_PORTAL_URL"`
 	// DefaultACR, when set (for example "mfa"), is requested on every login.
 	DefaultACR string `env:"GATEKEEPER_ACR_VALUES"`
 
@@ -101,6 +104,12 @@ func (c Gatekeeper) Validate() error {
 	}
 	if _, err := url.Parse(c.PublicURL); err != nil {
 		return fmt.Errorf("GATEKEEPER_PUBLIC_URL: %w", err)
+	}
+	if c.PortalURL != "" {
+		u, err := url.Parse(c.PortalURL)
+		if err != nil || u.Host == "" || !(u.Scheme == "https" || (c.IsLocal() && u.Scheme == "http")) {
+			return fmt.Errorf("GATEKEEPER_PORTAL_URL must be an https URL (http only with ENV=local), got %q", c.PortalURL)
+		}
 	}
 	for _, o := range c.Origins() {
 		u, err := url.Parse(o)

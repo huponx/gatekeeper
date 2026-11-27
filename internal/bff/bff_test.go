@@ -13,7 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/huponx/gatekeeper/internal/routes"
 	"github.com/huponx/gocommon/apperror"
+	"github.com/huponx/gocommon/grpcserver"
 	"github.com/huponx/gocommon/jwtx"
+	systemv1 "github.com/huponx/protogen/go/system/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -212,8 +214,8 @@ func (fakeExch) ServiceToken(_ context.Context, aud string) (string, error) { re
 // extension of the link and answers with the file.
 func TestAnonymousDownload(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	tbl, err := routes.Parse([]byte("upstreams:\n  dictionary: {target: d:9090}\nroutes:\n" +
-		"  - {http: \"GET /api/dictionary/downloads/{token}\", grpc: dictionary.v1.DictionaryService/DownloadDeck, upstream: dictionary, anonymous: true, download: true}\n"))
+	tbl, err := routes.Parse([]byte("upstreams:\n  dictionary: {target: d:9090}\nroutes:\n"+
+		"  - {http: \"GET /api/dictionary/downloads/{token}\", grpc: dictionary.v1.DictionaryService/DownloadDeck, upstream: dictionary, anonymous: true, download: true}\n"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,8 +274,8 @@ func TestInvalidStateRestartsLoginOnce(t *testing.T) {
 func streamServer(t *testing.T, fc *fakeCaller) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	tbl, err := routes.Parse([]byte("upstreams:\n  dictionary: {target: d:9090}\nroutes:\n" +
-		"  - {http: \"GET /api/dictionary/export-downloads/{token}\", grpc: dictionary.v1.DictionaryService/DownloadExportPart, upstream: dictionary, anonymous: true, download: true, stream: true}\n"))
+	tbl, err := routes.Parse([]byte("upstreams:\n  dictionary: {target: d:9090}\nroutes:\n"+
+		"  - {http: \"GET /api/dictionary/export-downloads/{token}\", grpc: dictionary.v1.DictionaryService/DownloadExportPart, upstream: dictionary, anonymous: true, download: true, stream: true}\n"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,4 +370,31 @@ func TestServerErrorsDoNotLeakTheReason(t *testing.T) {
 	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "disk") || strings.Contains(w.Body.String(), "reason") {
 		t.Errorf("status %d body %q", w.Code, w.Body.String())
 	}
+}
+
+func TestRootRedirectsToPortal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	v, err := jwtx.NewVerifier(jwtx.VerifierConfig{Issuer: "https://auth.example.com", Audience: "gatekeeper", Keys: jwtx.StaticKeySet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for portal, wantCode := range map[string]int{"https://portal.example.com": http.StatusFound, "": http.StatusNotFound} {
+		s := New(Config{PublicURL: "https://api.example.com", PortalURL: portal, Origins: uiOrigins, Secure: true}, nil, v, nil, nil, nil, &routes.Table{}, zap.NewNop())
+		r := gin.New()
+		s.Routes(r)
+		w := do(r, "GET", "/", nil)
+		if w.Code != wantCode || w.Header().Get("Location") != portal {
+			t.Errorf("portal %q: %d %q", portal, w.Code, w.Header().Get("Location"))
+		}
+	}
+}
+
+// StatusPermission is declared in protos/system/v1/permissions.proto (the gateway checks it itself, there is no RPC).
+func TestStatusPermissionIsDeclared(t *testing.T) {
+	for _, d := range grpcserver.DeclaredPermissions(systemv1.File_system_v1_permissions_proto) {
+		if d.Name == StatusPermission {
+			return
+		}
+	}
+	t.Errorf("%s is not declared in system/v1/permissions.proto", StatusPermission)
 }

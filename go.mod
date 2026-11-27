@@ -2,12 +2,13 @@ module github.com/huponx/gatekeeper
 
 go 1.26.10
 
-require github.com/huponx/gocommon v0.4.3
+require github.com/huponx/gocommon v0.5.1
 
 require (
 	github.com/gin-gonic/gin v1.12.0
+	github.com/huponx/protogen/go v0.3.0
 	github.com/jhump/protoreflect v1.19.0
-	github.com/redis/go-redis/v9 v9.24.0
+	github.com/redis/go-redis/v9 v9.24.1
 	go.uber.org/zap v1.28.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12

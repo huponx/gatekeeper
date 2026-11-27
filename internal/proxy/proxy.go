@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 
@@ -17,11 +16,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -55,17 +51,13 @@ func New(t *routes.Table, dial Dialer) (*Proxy, error) {
 		table: t, dial: dial, ttl: 10 * time.Minute, now: time.Now,
 		conns: map[string]grpc.ClientConnInterface{}, methods: map[string]*method{},
 	}
-	if t.Descriptors != "" {
-		b, err := os.ReadFile(t.Descriptors)
-		if err != nil {
+	switch {
+	case t.Files != nil:
+		p.files = t.Files
+	case t.Descriptors != "":
+		var err error
+		if p.files, err = routes.LoadDescriptors(t.Descriptors); err != nil {
 			return nil, err
-		}
-		var set descriptorpb.FileDescriptorSet
-		if err := proto.Unmarshal(b, &set); err != nil {
-			return nil, fmt.Errorf("descriptors: %w", err)
-		}
-		if p.files, err = protodesc.NewFiles(&set); err != nil {
-			return nil, fmt.Errorf("descriptors: %w", err)
 		}
 	}
 	return p, nil

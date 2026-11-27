@@ -49,7 +49,7 @@ How and why the gateway acts as a BFF (sessions, cookie, CORS, CSRF, logout, lim
 ## Routes
 
 ```yaml
-descriptors: /etc/gatekeeper/descriptors.binpb   # optional; without it gatekeeper uses gRPC reflection
+descriptors: /etc/gatekeeper/descriptors.binpb   # required: it also holds the permission rule of every RPC
 upstreams:
   courier: {target: courier.application.svc:9090}
 routes:
@@ -57,14 +57,13 @@ routes:
     grpc: courier.v1.CourierService/SendNotification
     upstream: courier
     audience: courier                  # aud of the exchanged token (default: the upstream name)
-    permission: courier:notification:send
-  - {http: GET /api/me/prefs/{id}, grpc: prefs.v1.Prefs/Get, upstream: prefs, public: true}
+  - {http: GET /api/me/prefs/{id}, grpc: prefs.v1.Prefs/Get, upstream: prefs}
 ```
 
-- **Deny by default**: a route needs `permission` (checked against the `perms` of the user's token) or `public: true` (any signed-in user, never anonymous). Anonymous callers only reach `/auth/*`.
+- **Deny by default**: a route has no `permission` of its own. Who may call it is the `authz.v1.rule` option of its RPC in `protos` (`any_of`: at least one of the permissions, `all_of`: every one, `public`: any signed-in user, never anonymous), read from `descriptors.binpb` and checked against the `perms` of the user's token (wildcards apply). It is the rule the service enforces itself, so gateway and service cannot disagree. A route whose RPC has no rule does not load, and `permission:` / `public:` in `routes.yaml` are rejected. `anonymous: true` (the deck downloads) stays a property of the route. Anonymous callers otherwise only reach `/auth/*`. `system:status:read` (`GET /api/system/status`) is declared in `protos/system/v1/permissions.proto`.
 - The gRPC request is the JSON body (an object, `Content-Type: application/json`, 1 MiB max) plus the query string and the `{path}` parameters, which fill top level fields (path parameters win). Unknown fields are a `400`.
 - Unary methods only. gRPC status codes map to HTTP (`NotFound` 404, `InvalidArgument` 400, `PermissionDenied` 403, `Unavailable` 503, ...); messages of 5xx are replaced by a generic text.
-- `descriptors.binpb` (`make descriptors`, which runs `buf build ../protos --path ../protos/identity --path ../protos/dictionary -o descriptors.binpb`) is the production source and is committed: the chart ships it in the ConfigMap, routes are checked at start-up and the upstreams keep reflection off (identity does not serve it, without the file the gateway fails with `Unimplemented ... ServerReflection`). After a change in `protos` run `make descriptors` and commit the file; `go test ./internal/proxy` fails when it is stale. Reflection works for local runs and for upstreams that enable it; gatekeeper authenticates those calls with its own client-credentials token.
+- `descriptors.binpb` (`make descriptors`, which runs `buf build ../protos --path ../protos/identity --path ../protos/dictionary --path ../protos/authz -o descriptors.binpb`) is the production source and is committed: the chart ships it in the ConfigMap, routes are checked at start-up and the upstreams keep reflection off (identity does not serve it, without the file the gateway fails with `Unimplemented ... ServerReflection`). After a change in `protos` run `make descriptors` and commit the file; `go test ./internal/proxy` fails when it is stale. The descriptor set is required, because the rules of the routes are read from it.
 - The dictionary routes include `POST /api/dictionary/saved-words/remove-exported` (`RemoveExportedWords`, `dictionary:word:write`), so `descriptors.binpb` must be rebuilt together with a release of the dictionary protos.
 - The category routes (`GET/POST /api/dictionary/categories`, `PATCH/DELETE /api/dictionary/categories/{id}`, `POST /api/dictionary/saved-words/categories`; `ListCategories`, `CreateCategory`, `RenameCategory`, `DeleteCategory`, `UpdateWordCategories`) also need the rebuilt `descriptors.binpb`.
 - Every upstream call carries a token from RFC 8693 token exchange (`aud` = route audience, `sub` = the user, `act` = this client, 2 minutes, no refresh), so each service sees only a token meant for it. Identity must have an exchange policy `(client, audience)` for every audience used.
@@ -88,6 +87,7 @@ routes:
 | `GATEKEEPER_ARGOCD_URL`, `GATEKEEPER_ARGOCD_TOKEN` | empty | turn on `GET /api/system/status` (the status of the ArgoCD applications for the admin home page): the address of `argocd-server` (in the cluster `http://argocd-server.argocd.svc.cluster.local`) and the API token of a read-only account (mm-ansible `argocd_api_tokens`). Both or neither. Without them the route answers 404 `not_configured` |
 | `GATEKEEPER_ARGOCD_PROJECT` | empty | list only the applications of this ArgoCD project |
 | `GATEKEEPER_POST_LOGIN_URL` | `/` | |
+| `GATEKEEPER_PORTAL_URL` | empty | the portal (https; http only with `ENV=local`): `GET /` redirects there and it is the post login fallback while `GATEKEEPER_POST_LOGIN_URL` is `/`. Without it `GET /` answers 404 |
 | `REDIS_*`, `PORT` (8080), `ENV`, `LOG_*` | | gocommon blocks |
 
 ## Setup (one time per environment)

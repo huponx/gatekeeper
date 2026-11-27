@@ -63,14 +63,17 @@ type StatusSource interface {
 	Apps(ctx context.Context) ([]systemstatus.App, error)
 }
 
-// StatusPermission is what GET /api/system/status needs.
+// StatusPermission is what GET /api/system/status needs. It is declared in protos/system/v1/permissions.proto and
+// TestStatusPermissionIsDeclared fails when the two differ.
 const StatusPermission = "system:status:read"
 
 type Config struct {
 	PublicURL    string
 	Origins      []string
 	PostLoginURL string
-	ACRValues    string
+	// PortalURL, when set, is where GET / redirects and the post login fallback (instead of "/"). Empty: GET / is a 404.
+	PortalURL string
+	ACRValues string
 	// Secure sets the Secure flag and the __Host- prefix of the cookies (everything except ENV=local over http).
 	Secure bool
 }
@@ -89,8 +92,11 @@ type Server struct {
 }
 
 func New(cfg Config, oc *oidcclient.Client, v *jwtx.Verifier, st *session.Store, c Caller, ex Exchanger, t *routes.Table, log *zap.Logger) *Server {
-	if cfg.PostLoginURL == "" {
+	if cfg.PostLoginURL == "" || cfg.PostLoginURL == "/" {
 		cfg.PostLoginURL = "/"
+		if cfg.PortalURL != "" {
+			cfg.PostLoginURL = cfg.PortalURL
+		}
 	}
 	return &Server{cfg: cfg, oidc: oc, verifier: v, sessions: st, caller: c, exch: ex, table: t, log: log, now: time.Now}
 }
@@ -106,6 +112,9 @@ func (s *Server) Routes(r *gin.Engine) {
 		c.Next()
 	})
 	r.Use(s.cors)
+	if s.cfg.PortalURL != "" {
+		r.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, s.cfg.PortalURL) })
+	}
 	r.GET("/auth/login", s.login)
 	r.GET("/auth/callback", s.callback)
 	r.GET("/auth/me", s.me)
@@ -593,7 +602,7 @@ func (s *Server) route(rt routes.Route) gin.HandlerFunc {
 		if rt.Method != http.MethodGet && !isBearer(c) && !s.checkWrite(c, sess) {
 			return
 		}
-		if !rt.Public && !p.Can(rt.Permission) {
+		if !rt.Rule.Allows(p.Perms) {
 			fail(c, http.StatusForbidden, "forbidden", "you are not allowed to do this")
 			return
 		}

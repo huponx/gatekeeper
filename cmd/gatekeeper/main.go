@@ -115,7 +115,7 @@ func main() {
 	router.GET("/healthz", healthz.Live())
 	router.GET("/readyz", healthz.Ready(healthz.Check{Name: "redis", Fn: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }}))
 	srvBFF := bff.New(bff.Config{
-		PublicURL: cfg.PublicURL, Origins: cfg.Origins(), PostLoginURL: cfg.PostLoginURL, ACRValues: cfg.DefaultACR,
+		PublicURL: cfg.PublicURL, Origins: cfg.Origins(), PostLoginURL: cfg.PostLoginURL, PortalURL: cfg.PortalURL, ACRValues: cfg.DefaultACR,
 		Secure: !cfg.IsLocal() || len(cfg.PublicURL) > 8 && cfg.PublicURL[:8] == "https://",
 	}, oc, verifier, sessions, px, exch, table, log)
 	if cfg.ArgoCDURL != "" {

@@ -6,7 +6,8 @@
 # with a Bearer token. mm-deploy sets the host, GATEKEEPER_UI_ORIGINS and the secrets.
 #
 # The routes are part of this chart (routes.yaml at the repo root, linked as files/routes.yaml, rendered into the ConfigMap gatekeeper-routes):
-# one source for every environment. Only the upstream addresses are values.
+# one source for every environment. Only the upstream addresses are values, and optionally `insecure: false` per upstream
+# (TLS to that upstream, CA from GRPC_TLS_CA_FILE) while the others stay plaintext.
 routes:
   upstreams:
     identity: {target: "identity.application.svc.cluster.local:9090"}

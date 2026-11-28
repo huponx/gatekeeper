@@ -16,7 +16,7 @@ data:
     descriptors: /etc/gatekeeper/descriptors.binpb
     upstreams:
     {{- range $name, $u := .Values.routes.upstreams }}
-      {{ $name }}: {target: {{ required (printf "routes.upstreams.%s.target is required" $name) $u.target | quote }}}
+      {{ $name }}: {target: {{ required (printf "routes.upstreams.%s.target is required" $name) $u.target | quote }}{{ if hasKey $u "insecure" }}, insecure: {{ $u.insecure }}{{ end }}}
     {{- end }}
     {{- .Files.Get "files/routes.yaml" | nindent 4 }}
 binaryData:

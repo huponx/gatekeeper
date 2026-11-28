@@ -22,7 +22,7 @@ func TestChartRoutesMatchDescriptors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tbl, err := routes.Parse([]byte("descriptors: ../../descriptors.binpb\nupstreams:\n  identity: {target: \"identity:9090\"}\n  dictionary: {target: \"dictionary:9090\"}\n"+string(raw)), routes.DescriptorRules(files))
+	tbl, err := routes.Parse([]byte("descriptors: ../../descriptors.binpb\nupstreams:\n  identity: {target: \"identity:9090\"}\n  dictionary: {target: \"dictionary:9090\"}\n  courier: {target: \"courier:9090\"}\n"+string(raw)), routes.DescriptorRules(files))
 	if err != nil {
 		t.Fatal(err)
 	}

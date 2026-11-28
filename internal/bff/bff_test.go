@@ -13,9 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/huponx/gatekeeper/internal/routes"
 	"github.com/huponx/gocommon/apperror"
-	"github.com/huponx/gocommon/grpcserver"
 	"github.com/huponx/gocommon/jwtx"
-	systemv1 "github.com/huponx/protogen/go/system/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -389,12 +387,20 @@ func TestRootRedirectsToPortal(t *testing.T) {
 	}
 }
 
-// StatusPermission is declared in protos/system/v1/permissions.proto (the gateway checks it itself, there is no RPC).
-func TestStatusPermissionIsDeclared(t *testing.T) {
-	for _, d := range grpcserver.DeclaredPermissions(systemv1.File_system_v1_permissions_proto) {
-		if d.Name == StatusPermission {
-			return
-		}
+// One reply message is one `data:` line of JSON, with the zero values (unread 0 must reach the browser).
+func TestSSEFrame(t *testing.T) {
+	md := chunkDescriptor()
+	m := dynamicpb.NewMessage(md)
+	m.Set(md.Fields().ByName("filename"), protoreflect.ValueOfString("a\nb"))
+	frame, err := sseFrame(m)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Errorf("%s is not declared in system/v1/permissions.proto", StatusPermission)
+	got := string(frame)
+	if !strings.HasPrefix(got, "data: {") || !strings.HasSuffix(got, "}\n\n") || strings.Count(got, "\n") != 2 {
+		t.Fatalf("frame %q", got)
+	}
+	if !strings.Contains(got, `"size":"0"`) || !strings.Contains(got, `a\nb`) {
+		t.Fatalf("frame %q", got)
+	}
 }

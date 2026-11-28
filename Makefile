@@ -42,7 +42,7 @@ routes:
 # descriptors.binpb describes the services the routes call; the chart ships it (the upstreams keep
 # reflection off). Rebuild and commit it whenever ../protos changes a method used in routes.yaml.
 descriptors:
-	buf build ../protos --path ../protos/identity --path ../protos/dictionary --path ../protos/authz -o descriptors.binpb
+	buf build ../protos --path ../protos/identity --path ../protos/courier --path ../protos/dictionary --path ../protos/bill --path ../protos/system --path ../protos/authz -o descriptors.binpb
 
 test:
 	$(GO) test -race ./...

@@ -95,7 +95,7 @@ func (p *Proxy) conn(ctx context.Context, name string) (grpc.ClientConnInterface
 }
 
 func (p *Proxy) resolve(ctx context.Context, r routes.Route) (*method, error) {
-	key := fmt.Sprintf("%s|%s|%t", r.Upstream, r.GRPC, r.Stream) // the same method may be routed with and without stream
+	key := fmt.Sprintf("%s|%s|%t", r.Upstream, r.GRPC, r.Streams()) // the same method may be routed with and without stream
 	p.mu.Lock()
 	m := p.methods[key]
 	p.mu.Unlock()
@@ -116,10 +116,10 @@ func (p *Proxy) resolve(ctx context.Context, r routes.Route) (*method, error) {
 	switch {
 	case md.IsStreamingClient():
 		return nil, errors.New("client-streaming methods are not supported")
-	case md.IsStreamingServer() && !r.Stream:
-		return nil, errors.New("a server-streaming method needs stream: true on its route")
-	case !md.IsStreamingServer() && r.Stream:
-		return nil, errors.New("stream: true needs a server-streaming method")
+	case md.IsStreamingServer() && !r.Streams():
+		return nil, errors.New("a server-streaming method needs stream: true or sse: true on its route")
+	case !md.IsStreamingServer() && r.Streams():
+		return nil, errors.New("stream: true and sse: true need a server-streaming method")
 	}
 	m = &method{full: "/" + r.Service + "/" + r.RPC, in: md.Input(), out: md.Output(), at: p.now()}
 	p.mu.Lock()

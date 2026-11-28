@@ -56,6 +56,9 @@ func TestParseRejects(t *testing.T) {
 		"anonymous json":     "  - {http: GET /a, grpc: p.S/M, upstream: courier, anonymous: true}\n",
 		"download post":      "  - {http: POST /a, grpc: p.S/M, upstream: courier, download: true}\n",
 		"stream no download": "  - {http: GET /a, grpc: p.S/M, upstream: courier, stream: true}\n",
+		"sse post":           "  - {http: POST /a, grpc: p.S/M, upstream: courier, sse: true, timeout: 5m}\n",
+		"sse no timeout":     "  - {http: GET /a, grpc: p.S/M, upstream: courier, sse: true}\n",
+		"sse download":       "  - {http: GET /a, grpc: p.S/M, upstream: courier, sse: true, timeout: 5m, download: true}\n",
 		"unknown field":      "  - {http: GET /a, grpc: p.S/M, upstream: courier, perm: x}\n",
 	}
 	for name, body := range cases {
@@ -86,7 +89,7 @@ func TestChartRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tbl, err := Parse([]byte("upstreams:\n  identity: {target: \"identity:9090\"}\n  dictionary: {target: \"dictionary:9090\"}\n"+string(raw)), DescriptorRules(files))
+	tbl, err := Parse([]byte("upstreams:\n  identity: {target: \"identity:9090\"}\n  dictionary: {target: \"dictionary:9090\"}\n  courier: {target: \"courier:9090\"}\n"+string(raw)), DescriptorRules(files))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +97,7 @@ func TestChartRoutes(t *testing.T) {
 		t.Fatal("no routes")
 	}
 	declared := map[string]bool{}
-	for _, path := range []string{"identity/v1/permissions.proto", "dictionary/v1/permissions.proto"} {
+	for _, path := range []string{"identity/v1/permissions.proto", "dictionary/v1/permissions.proto", "courier/v1/permissions.proto"} {
 		fd, err := files.FindFileByPath(path)
 		if err != nil {
 			t.Fatalf("%s is not in descriptors.binpb (make descriptors): %v", path, err)
@@ -151,5 +154,83 @@ func TestRulesFromTheDescriptors(t *testing.T) {
 	}
 	if r, ok := rules.Rule("identity.v1.IdentityService", "GetMe"); !ok || !r.Public {
 		t.Errorf("GetMe: %+v %v", r, ok)
+	}
+}
+
+func TestAllowed(t *testing.T) {
+	r := RuleMap{
+		"p.S/Any":    {Any: []string{"a:read", "b:read"}},
+		"p.S/All":    {All: []string{"a:read", "c:read"}},
+		"p.S/Public": grpcserver.PublicRule,
+	}
+	tbl, err := Parse([]byte("upstreams:\n  u: {target: x}\nroutes:\n"+
+		"  - {http: GET /any, grpc: p.S/Any, upstream: u}\n"+
+		"  - {http: \"PUT /all/{id}\", grpc: p.S/All, upstream: u}\n"+
+		"  - {http: GET /public, grpc: p.S/Public, upstream: u}\n"+
+		"  - {http: \"GET /dl/{token}\", grpc: p.S/Public, upstream: u, anonymous: true, download: true}\n"+
+		"capabilities:\n  cap.one: {any_of: [\"a:read\"]}\n  cap.two: {all_of: [\"a:read\", \"z:read\"]}\n"), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name  string
+		perms []string
+		want  []string
+	}{
+		{"none", nil, []string{"GET /public"}},
+		{"any via name", []string{"a:read"}, []string{"GET /any", "GET /public", "cap.one"}},
+		{"any via wildcard", []string{"b:*"}, []string{"GET /any", "GET /public"}},
+		{"all needs both", []string{"a:read", "c:read"}, []string{"GET /any", "GET /public", "PUT /all/{id}", "cap.one"}},
+		{"all of a capability", []string{"a:read", "z:read"}, []string{"GET /any", "GET /public", "cap.one", "cap.two"}},
+		{"star", []string{"*"}, []string{"GET /any", "GET /public", "PUT /all/{id}", "cap.one", "cap.two"}},
+	} {
+		got := tbl.Allowed(c.perms)
+		if strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+	if !tbl.CanDo("cap.one", []string{"a:read"}) || tbl.CanDo("cap.one", nil) || tbl.CanDo("nope", []string{"*"}) {
+		t.Error("CanDo")
+	}
+}
+
+func TestCapabilityRejects(t *testing.T) {
+	for _, doc := range []string{
+		"capabilities:\n  has space: {public: true}\n",
+		"capabilities:\n  a/b: {public: true}\n",
+		"capabilities:\n  empty: {}\n",
+		"capabilities:\n  both: {public: true, any_of: [x]}\n",
+	} {
+		if _, err := Parse([]byte(head+doc), rules); err == nil {
+			t.Errorf("%q loaded", doc)
+		}
+	}
+}
+
+// The capabilities of the shipped routes.yaml only name declared permissions (Load refuses the file otherwise).
+func TestShippedCapabilitiesAreDeclared(t *testing.T) {
+	raw, err := os.ReadFile("../../routes.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := LoadDescriptors("../../descriptors.binpb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbl, err := Parse([]byte("upstreams:\n  identity: {target: x}\n  dictionary: {target: x}\n  courier: {target: x}\n"+string(raw)), DescriptorRules(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bill.invoices", "system.status"} {
+		if _, ok := tbl.Capabilities[name]; !ok {
+			t.Errorf("capability %s is missing", name)
+		}
+	}
+	if err := tbl.checkCapabilities(files); err != nil {
+		t.Error(err)
+	}
+	tbl.Capabilities["typo"] = &Capability{Rule: grpcserver.Rule{Any: []string{"bill:invoice:reed"}}}
+	if err := tbl.checkCapabilities(files); err == nil {
+		t.Error("an undeclared permission passed")
 	}
 }

@@ -13,6 +13,8 @@ import (
 type Gatekeeper struct {
 	config.Log
 	config.Redis
+	// GRPCTLS: only GRPC_TLS_CA_FILE is used, to trust the upstreams that serve TLS.
+	config.GRPCTLS
 
 	Host            string        `env:"HOST" envDefault:"0.0.0.0"`
 	Port            int           `env:"PORT" envDefault:"8080"`

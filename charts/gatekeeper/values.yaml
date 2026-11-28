@@ -11,6 +11,7 @@ routes:
   upstreams:
     identity: {target: "identity.application.svc.cluster.local:9090"}
     dictionary: {target: "dictionary.application.svc.cluster.local:9090"}
+    courier: {target: "courier.application.svc.cluster.local:9090"}
 
 application:
   deployment:

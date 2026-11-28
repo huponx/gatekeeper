@@ -34,6 +34,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -63,9 +64,8 @@ type StatusSource interface {
 	Apps(ctx context.Context) ([]systemstatus.App, error)
 }
 
-// StatusPermission is what GET /api/system/status needs. It is declared in protos/system/v1/permissions.proto and
-// TestStatusPermissionIsDeclared fails when the two differ.
-const StatusPermission = "system:status:read"
+// StatusCapability is the capability of routes.yaml that GET /api/system/status needs (the route is not a gRPC one).
+const StatusCapability = "system.status"
 
 type Config struct {
 	PublicURL    string
@@ -471,7 +471,8 @@ func (s *Server) me(c *gin.Context) {
 	}
 	out := gin.H{
 		"sub": p.Subject, "roles": p.Roles, "scopes": p.Scopes, "perms": p.Perms,
-		"amr": p.AMR, "csrf_token": sess.CSRF, "expires_at": sess.ExpiresAt.UTC(),
+		"allowed": s.table.Allowed(p.Perms),
+		"amr":     p.AMR, "csrf_token": sess.CSRF, "expires_at": sess.ExpiresAt.UTC(),
 	}
 	// who to show in the UI: the profile claims of the ID token that identity issued at sign in
 	name, email := profileClaims(sess.IDToken)
@@ -563,14 +564,14 @@ func (s *Server) backchannelLogout(c *gin.Context) {
 
 // ---- system status ----
 
-// systemStatus answers the applications of ArgoCD for users who hold system:status:read (deny by default,
+// systemStatus answers the applications of ArgoCD for users who pass the capability system.status (deny by default,
 // like a route without `public`). Not a gRPC route, so it is not in routes.yaml.
 func (s *Server) systemStatus(c *gin.Context) {
 	_, _, p, ok := s.authenticate(c)
 	if !ok {
 		return
 	}
-	if !p.Can(StatusPermission) {
+	if !s.table.CanDo(StatusCapability, p.Perms) {
 		fail(c, http.StatusForbidden, "forbidden", "you are not allowed to do this")
 		return
 	}
@@ -623,6 +624,10 @@ func (s *Server) route(rt routes.Route) gin.HandlerFunc {
 		}
 		if rt.Stream {
 			s.streamFile(c, rt, body, tok)
+			return
+		}
+		if rt.SSE {
+			s.streamEvents(c, rt, body, tok)
 			return
 		}
 		out, err := s.caller.Call(c.Request.Context(), rt, body, tok)
@@ -729,6 +734,55 @@ func (s *Server) streamFile(c *gin.Context, rt routes.Route, body []byte, tok st
 		s.log.Error("download stream broke", zap.Error(err), zap.String("grpc", rt.GRPC), zap.Int64("wrote", wrote), zap.Int64("size", want))
 	}
 	panic(http.ErrAbortHandler)
+}
+
+// sseFrame is one Server-Sent Events message: the reply as one line of JSON (JSON has no raw newline).
+func sseFrame(m *dynamicpb.Message) ([]byte, error) {
+	js, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return append(append([]byte("data: "), js...), '\n', '\n'), nil
+}
+
+// streamEvents answers a route with sse: true: the headers go out with the first message (an error before it is an
+// ordinary error answer, so EventSource sees the status), then every message is written and flushed as it arrives.
+// The write deadline moves on after every message, so only a client that stalls is cut (the upstream sends a
+// heartbeat, so an idle stream still writes). The stream ends at the route timeout; the browser reconnects with a
+// session that is checked again.
+func (s *Server) streamEvents(c *gin.Context, rt routes.Route, body []byte, tok string) {
+	rc := http.NewResponseController(c.Writer)
+	started := false
+	err := s.caller.CallStream(c.Request.Context(), rt, body, tok, func(m *dynamicpb.Message) error {
+		frame, err := sseFrame(m)
+		if err != nil {
+			return err
+		}
+		if !started {
+			started = true
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-store")
+			c.Header("X-Accel-Buffering", "no") // nginx: do not buffer the stream
+			c.Status(http.StatusOK)
+		}
+		_ = rc.SetWriteDeadline(s.now().Add(streamWriteWindow))
+		if _, err := c.Writer.Write(frame); err != nil {
+			return err
+		}
+		c.Writer.Flush()
+		return nil
+	})
+	if !started {
+		if err == nil {
+			err = errors.New("the stream carried no message")
+		}
+		s.writeError(c, rt, err)
+		return
+	}
+	// the timeout or the client going away is the normal end; anything else is worth a log line
+	if err != nil && c.Request.Context().Err() == nil && !errors.Is(err, context.DeadlineExceeded) && status.Code(err) != codes.DeadlineExceeded {
+		s.log.Warn("event stream ended", zap.Error(err), zap.String("grpc", rt.GRPC))
+	}
 }
 
 // writeFile answers a download route: the reply has `filename` and `data` (base64 in the JSON).

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,6 +90,9 @@ type Upstream struct {
 	Insecure *bool `yaml:"insecure"`
 }
 
+// Streams reports whether the route calls a server-streaming method (a file stream or Server-Sent Events).
+func (r Route) Streams() bool { return r.Stream || r.SSE }
+
 type Route struct {
 	HTTP     string `yaml:"http"`
 	GRPC     string `yaml:"grpc"`
@@ -108,6 +112,10 @@ type Route struct {
 	// `filename` (string) and `size` (int64), every one has `data` (bytes). The HTTP answer is that file, written
 	// as the chunks arrive, so a file larger than a gRPC message never sits whole in memory. Only with `download: true`.
 	Stream bool `yaml:"stream"`
+	// SSE: the method is server-streaming and the HTTP answer is a Server-Sent Events stream: every reply message is
+	// one `data:` line of JSON, written and flushed as it arrives (the bell of the web apps). `timeout` is the longest
+	// the stream lives; the browser reconnects (EventSource) and the session is checked again. Only for a GET.
+	SSE bool `yaml:"sse"`
 
 	Method string `yaml:"-"`
 	Path   string `yaml:"-"`
@@ -118,6 +126,17 @@ type Route struct {
 	RPC     string `yaml:"-"`
 }
 
+// Capability is a named rule for something the UI asks about that no route stands for (a card of the portal, a page
+// that reads the gateway itself). Same shape as `authz.v1.rule`. Its name has no space and no "/", so it never
+// collides with a route key ("GET /api/users"). Every permission of it must be declared in a permissions.proto.
+type Capability struct {
+	AnyOf  []string `yaml:"any_of"`
+	AllOf  []string `yaml:"all_of"`
+	Public bool     `yaml:"public"`
+
+	Rule grpcserver.Rule `yaml:"-"`
+}
+
 type Table struct {
 	// Descriptors is a protobuf FileDescriptorSet (buf build -o descriptors.binpb) that describes
 	// every routed service. Without it gatekeeper asks the upstreams through gRPC reflection,
@@ -125,6 +144,8 @@ type Table struct {
 	Descriptors string              `yaml:"descriptors"`
 	Upstreams   map[string]Upstream `yaml:"upstreams"`
 	Routes      []Route             `yaml:"routes"`
+	// Capabilities are named rules, answered in /auth/me next to the routes.
+	Capabilities map[string]*Capability `yaml:"capabilities"`
 
 	// Files is the loaded descriptor set (set by Load).
 	Files *protoregistry.Files `yaml:"-"`
@@ -154,7 +175,53 @@ func Load(path string) (*Table, error) {
 		return nil, err
 	}
 	t.Files = files
+	if err := t.checkCapabilities(files); err != nil {
+		return nil, err
+	}
 	return t, nil
+}
+
+// checkCapabilities refuses a capability that names a permission no permissions.proto declares.
+func (t *Table) checkCapabilities(files *protoregistry.Files) error {
+	declared := map[string]bool{}
+	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		for _, d := range grpcserver.DeclaredPermissions(fd) {
+			declared[d.Name] = true
+		}
+		return true
+	})
+	for name, c := range t.Capabilities {
+		for _, p := range append(append([]string(nil), c.Rule.Any...), c.Rule.All...) {
+			if !declared[p] {
+				return fmt.Errorf("routes: capability %q: %s is not a declared permission", name, p)
+			}
+		}
+	}
+	return nil
+}
+
+// Allowed lists what a caller holding perms may ask for: the key ("GET /api/users") of every route whose rule it
+// passes (anonymous routes have no session and are left out) and the name of every capability it passes. Sorted.
+func (t *Table) Allowed(perms []string) []string {
+	out := []string{}
+	for _, r := range t.Routes {
+		if !r.Anonymous && r.Rule.Allows(perms) {
+			out = append(out, r.Method+" "+r.Path)
+		}
+	}
+	for name, c := range t.Capabilities {
+		if c.Rule.Allows(perms) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CanDo reports whether a caller holding perms passes the capability. An unknown capability is refused.
+func (t *Table) CanDo(capability string, perms []string) bool {
+	c, ok := t.Capabilities[capability]
+	return ok && c.Rule.Allows(perms)
 }
 
 // Parse validates a routes document. rules gives the authorization rule of each RPC: a route whose RPC has none is
@@ -170,6 +237,25 @@ func Parse(b []byte, rules Rules) (*Table, error) {
 		if u.Target == "" {
 			return nil, fmt.Errorf("routes: upstream %q has no target", name)
 		}
+	}
+	for name, c := range t.Capabilities {
+		if c == nil || strings.ContainsAny(name, " /") || name == "" {
+			return nil, fmt.Errorf("routes: capability %q: the name needs no space and no \"/\", and a rule", name)
+		}
+		n := 0
+		if len(c.AnyOf) > 0 {
+			n++
+		}
+		if len(c.AllOf) > 0 {
+			n++
+		}
+		if c.Public {
+			n++
+		}
+		if n != 1 {
+			return nil, fmt.Errorf("routes: capability %q: exactly one of any_of, all_of and public", name)
+		}
+		c.Rule = grpcserver.Rule{Any: c.AnyOf, All: c.AllOf, Public: c.Public}
 	}
 	seen := map[string]bool{}
 	for i := range t.Routes {
@@ -210,6 +296,9 @@ func Parse(b []byte, rules Rules) (*Table, error) {
 		}
 		if r.Stream && !r.Download {
 			return nil, fmt.Errorf("routes[%d] %s: stream is only for a route with download: true", i, key)
+		}
+		if r.SSE && (method != http.MethodGet || r.Download || r.Stream || r.Anonymous || r.Timeout <= 0) {
+			return nil, fmt.Errorf("routes[%d] %s: sse is only for a GET with a timeout, not with download, stream or anonymous", i, key)
 		}
 		if r.Anonymous && (method != http.MethodGet || !r.Download) {
 			return nil, fmt.Errorf("routes[%d] %s: anonymous is only for a GET with download: true", i, key)

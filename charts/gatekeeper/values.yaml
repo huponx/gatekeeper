@@ -21,6 +21,15 @@ application:
       - name: routes
         configMap:
           name: gatekeeper-routes
+      # In-cluster gRPC TLS (certificate of cert-manager, see the TLS section of courier/docs/setup-notification.md).
+      # Optional: the pod starts without it, nothing reads it until GRPC_TLS_* / *_INSECURE=false are set.
+      - name: grpc-tls
+        secret:
+          secretName: identity-grpc-tls
+          optional: true
+          items:
+            - key: ca.crt
+              path: ca.crt
     container:
       image:
         repository: huponx/gatekeeper
@@ -61,6 +70,9 @@ application:
         - name: routes
           mountPath: /etc/gatekeeper
           readOnly: true
+        - name: grpc-tls
+          mountPath: /var/run/tls
+          readOnly: true
   serviceAccount:
     create: true
   service:
@@ -72,6 +84,8 @@ application:
       PORT: "8080"
       LOG_ENCODING: json
       GATEKEEPER_ROUTES_FILE: /etc/gatekeeper/routes.yaml
+      # the CA trusted by the gRPC clients of this service; used only once a *_INSECURE variable is false
+      GRPC_TLS_CA_FILE: /var/run/tls/ca.crt
   # Secret values stay out of git: reference existing Secrets (mm-deploy overrides this list).
   secrets: []
   ingress:

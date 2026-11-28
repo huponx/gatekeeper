@@ -2,7 +2,7 @@ module github.com/huponx/gatekeeper
 
 go 1.26.10
 
-require github.com/huponx/gocommon v0.6.0
+require github.com/huponx/gocommon v0.7.0
 
 require (
 	github.com/gin-gonic/gin v1.12.0

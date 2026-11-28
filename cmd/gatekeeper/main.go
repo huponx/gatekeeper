@@ -93,8 +93,12 @@ func main() {
 		if u.Insecure != nil {
 			insecure = *u.Insecure
 		}
-		return grpcclient.Dial(ctx, u.Target, grpcclient.WithLogger(log), grpcclient.WithInsecure(insecure),
-			grpcclient.WithMaxMsgSize(cfg.UpstreamMaxRecvBytes, 0))
+		opts := []grpcclient.Option{grpcclient.WithLogger(log), grpcclient.WithInsecure(insecure),
+			grpcclient.WithMaxMsgSize(cfg.UpstreamMaxRecvBytes, 0)}
+		if !insecure {
+			opts = append(opts, grpcclient.WithTLSFiles(cfg.ClientTLS()))
+		}
+		return grpcclient.Dial(ctx, u.Target, opts...)
 	}
 	px, err := proxy.New(table, dial)
 	if err != nil {

@@ -62,6 +62,7 @@ routes:
   - {http: "POST /api/me/mfa/setup", grpc: identity.v1.IdentityService/BeginMyMFA, upstream: identity}
   - {http: "POST /api/me/mfa", grpc: identity.v1.IdentityService/ConfirmMyMFA, upstream: identity}
   - {http: "POST /api/me/mfa/disable", grpc: identity.v1.IdentityService/DisableMyMFA, upstream: identity}
+  - {http: "POST /api/me/mfa/recovery-codes", grpc: identity.v1.IdentityService/RegenerateMyRecoveryCodes, upstream: identity}
   # the own passkeys (WebAuthn): the browser runs the ceremony, the options and the credential travel as JSON strings
   - {http: "GET /api/me/passkeys", grpc: identity.v1.IdentityService/ListMyPasskeys, upstream: identity}
   - {http: "POST /api/me/passkeys/begin", grpc: identity.v1.IdentityService/BeginMyPasskey, upstream: identity}
@@ -140,3 +141,47 @@ routes:
   - {http: "PUT /api/dictionary/me/settings", grpc: dictionary.v1.DictionaryService/UpdateMySettings, upstream: dictionary}
   - {http: "GET /api/dictionary/downloads/{token}", grpc: dictionary.v1.DictionaryService/DownloadDeck, upstream: dictionary, anonymous: true, download: true}
   - {http: "GET /api/dictionary/export-downloads/{token}", grpc: dictionary.v1.DictionaryService/DownloadExportPart, upstream: dictionary, anonymous: true, download: true, stream: true, timeout: 30m}
+
+  # notifications of the signed-in user (the bell of every web app): courier takes the user from the token, never
+  # from the request. The stream is Server-Sent Events: a first message with the unread count, one per change, a
+  # heartbeat every 25 s; it ends after 10 minutes and the browser reconnects (EventSource), which checks the
+  # session again. Behind an ingress the read/send timeout must exceed the heartbeat (see the chart notes).
+  - {http: "GET /api/notifications", grpc: courier.v1.InboxService/ListInbox, upstream: courier}
+  - {http: "GET /api/notifications/unread-count", grpc: courier.v1.InboxService/GetUnreadCount, upstream: courier}
+  - {http: "POST /api/notifications/read", grpc: courier.v1.InboxService/MarkRead, upstream: courier}
+  - {http: "POST /api/notifications/archive", grpc: courier.v1.InboxService/Archive, upstream: courier}
+  - {http: "GET /api/notifications/stream", grpc: courier.v1.InboxService/StreamInbox, upstream: courier, sse: true, timeout: 10m}
+  # what the user chose: categories x channels, quiet hours, and the Telegram chat (the bot links it on `/start <code>`)
+  - {http: "GET /api/notifications/preferences", grpc: courier.v1.PreferencesService/GetPreferences, upstream: courier}
+  - {http: "PUT /api/notifications/preferences", grpc: courier.v1.PreferencesService/SetPreferences, upstream: courier}
+  - {http: "POST /api/notifications/telegram-binding", grpc: courier.v1.PreferencesService/StartTelegramBinding, upstream: courier}
+  - {http: "DELETE /api/notifications/telegram-binding", grpc: courier.v1.PreferencesService/UnbindTelegram, upstream: courier}
+  # Web Push: the subscription of this browser (the endpoint of DELETE is a query parameter)
+  - {http: "POST /api/notifications/push-subscription", grpc: courier.v1.PreferencesService/SubscribePush, upstream: courier}
+  - {http: "DELETE /api/notifications/push-subscription", grpc: courier.v1.PreferencesService/UnsubscribePush, upstream: courier}
+  # courier for the administrators: event types and templates (edit, preview, versions, revert), announcements, and the
+  # delivery log with the retry of a failed delivery. The templates are named by the template directory
+  # (system_announcement), the locale (en) and the channel (email, telegram, in_app).
+  - {http: "GET /api/courier/event-types", grpc: courier.v1.AdminNotificationService/ListEventTypes, upstream: courier}
+  - {http: "GET /api/courier/templates/{template}/{locale}/{channel}", grpc: courier.v1.AdminNotificationService/GetTemplate, upstream: courier}
+  - {http: "PUT /api/courier/templates/{template}/{locale}/{channel}", grpc: courier.v1.AdminNotificationService/SaveTemplate, upstream: courier}
+  - {http: "DELETE /api/courier/templates/{template}/{locale}/{channel}", grpc: courier.v1.AdminNotificationService/RevertTemplate, upstream: courier}
+  - {http: "POST /api/courier/templates/{template}/{locale}/{channel}/preview", grpc: courier.v1.AdminNotificationService/PreviewTemplate, upstream: courier}
+  - {http: "GET /api/courier/templates/{template}/{locale}/{channel}/versions", grpc: courier.v1.AdminNotificationService/ListTemplateVersions, upstream: courier}
+  - {http: "POST /api/courier/broadcasts", grpc: courier.v1.AdminNotificationService/CreateBroadcast, upstream: courier, timeout: 60s}
+  - {http: "GET /api/courier/broadcasts", grpc: courier.v1.AdminNotificationService/ListBroadcasts, upstream: courier}
+  - {http: "GET /api/courier/deliveries", grpc: courier.v1.AdminNotificationService/ListDeliveries, upstream: courier}
+  - {http: "POST /api/courier/deliveries/{delivery_id}/retry", grpc: courier.v1.CourierService/RetryDelivery, upstream: courier}
+  # webhooks (Slack or a signed JSON POST) that receive events; the secret of a generic one is shown once, when made
+  - {http: "GET /api/courier/webhooks", grpc: courier.v1.AdminNotificationService/ListWebhooks, upstream: courier}
+  - {http: "POST /api/courier/webhooks", grpc: courier.v1.AdminNotificationService/SaveWebhook, upstream: courier}
+  - {http: "PUT /api/courier/webhooks/{id}", grpc: courier.v1.AdminNotificationService/SaveWebhook, upstream: courier}
+  - {http: "DELETE /api/courier/webhooks/{id}", grpc: courier.v1.AdminNotificationService/DeleteWebhook, upstream: courier}
+  - {http: "POST /api/courier/webhooks/{id}/test", grpc: courier.v1.AdminNotificationService/TestWebhook, upstream: courier, timeout: 20s}
+
+# Capabilities: a name and a rule (same shape as authz.v1.rule) for what the UI asks in /auth/me `allowed` and no route
+# stands for. Every permission must be declared in a permissions.proto, else gatekeeper does not start. The name has no
+# space and no "/", so it never collides with a route key ("GET /api/users").
+capabilities:
+  bill.invoices: {any_of: ["bill:invoice:read"]}
+  system.status: {any_of: ["system:status:read"]}

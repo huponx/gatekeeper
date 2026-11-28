@@ -2,11 +2,10 @@ module github.com/huponx/gatekeeper
 
 go 1.26.10
 
-require github.com/huponx/gocommon v0.5.1
+require github.com/huponx/gocommon v0.6.0
 
 require (
 	github.com/gin-gonic/gin v1.12.0
-	github.com/huponx/protogen/go v0.3.0
 	github.com/jhump/protoreflect v1.19.0
 	github.com/redis/go-redis/v9 v9.24.1
 	go.uber.org/zap v1.28.0
@@ -32,6 +31,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/huponx/protogen/go v0.3.1 // indirect
 	github.com/jhump/protoreflect/v2 v2.0.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.2 // indirect
